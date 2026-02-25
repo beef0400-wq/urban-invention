@@ -3,11 +3,12 @@ import os
 import json
 import requests
 import sqlite3
+from datetime import datetime, timezone
 
 app = Flask(__name__)
 
 CHANNEL_ACCESS_TOKEN = os.getenv("CHANNEL_ACCESS_TOKEN")
-ADMIN_SECRET = os.getenv("ADMIN_SECRET", "1234")  # 等下你會在 Render 改成自己的密碼
+ADMIN_SECRET = os.getenv("ADMIN_SECRET", "1234")
 DB_PATH = "members.db"
 
 def init_db():
@@ -15,33 +16,43 @@ def init_db():
     cur = conn.cursor()
     cur.execute("""
         CREATE TABLE IF NOT EXISTS members (
-            user_id TEXT PRIMARY KEY
+            user_id TEXT PRIMARY KEY,
+            expires_at TEXT NOT NULL
         )
     """)
     conn.commit()
     conn.close()
 
-def add_member(user_id: str):
+def set_expiry(user_id: str, expires_at_yyyy_mm_dd: str):
+    # expires_at 存成 UTC 的當天 23:59:59
+    dt = datetime.strptime(expires_at_yyyy_mm_dd, "%Y-%m-%d").replace(
+        hour=23, minute=59, second=59, tzinfo=timezone.utc
+    )
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
-    cur.execute("INSERT OR IGNORE INTO members (user_id) VALUES (?)", (user_id,))
+    cur.execute("""
+        INSERT INTO members (user_id, expires_at)
+        VALUES (?, ?)
+        ON CONFLICT(user_id) DO UPDATE SET expires_at=excluded.expires_at
+    """, (user_id, dt.isoformat()))
     conn.commit()
     conn.close()
+    return dt.isoformat()
 
-def remove_member(user_id: str):
+def get_expiry(user_id: str):
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
-    cur.execute("DELETE FROM members WHERE user_id = ?", (user_id,))
-    conn.commit()
-    conn.close()
-
-def is_member(user_id: str) -> bool:
-    conn = sqlite3.connect(DB_PATH)
-    cur = conn.cursor()
-    cur.execute("SELECT 1 FROM members WHERE user_id = ?", (user_id,))
+    cur.execute("SELECT expires_at FROM members WHERE user_id = ?", (user_id,))
     row = cur.fetchone()
     conn.close()
-    return row is not None
+    return row[0] if row else None
+
+def is_member(user_id: str) -> bool:
+    exp = get_expiry(user_id)
+    if not exp:
+        return False
+    expires_at = datetime.fromisoformat(exp)
+    return expires_at > datetime.now(timezone.utc)
 
 def reply_message(reply_token, text):
     url = "https://api.line.me/v2/bot/message/reply"
@@ -78,33 +89,22 @@ def webhook():
             user_id = event.get("source", {}).get("userId", "")
             print("LINE userId:", user_id)
 
-            # 管理指令：加入會員 / 移除會員
-            # 格式：加入會員 Uxxxx 密碼
-            if text.startswith("加入會員 "):
+            # 管理指令：開通 <userId> <YYYY-MM-DD> <密碼>
+            # 例：開通 Uxxxx 2026-03-25 xp839
+            if text.startswith("開通 "):
                 parts = text.split()
-                if len(parts) != 3:
-                    reply_text = "格式：加入會員 <userId> <管理密碼>"
+                if len(parts) != 4:
+                    reply_text = "格式：開通 <userId> <YYYY-MM-DD> <管理密碼>\n例：開通 Uxxxx 2026-03-25 xp839"
                 else:
-                    _, target_id, secret = parts
+                    _, target_id, date_str, secret = parts
                     if secret != ADMIN_SECRET:
                         reply_text = "管理密碼錯誤。"
                     else:
-                        add_member(target_id)
-                        reply_text = f"✅ 已加入會員：{target_id}"
-                reply_message(reply_token, reply_text)
-                continue
-
-            if text.startswith("移除會員 "):
-                parts = text.split()
-                if len(parts) != 3:
-                    reply_text = "格式：移除會員 <userId> <管理密碼>"
-                else:
-                    _, target_id, secret = parts
-                    if secret != ADMIN_SECRET:
-                        reply_text = "管理密碼錯誤。"
-                    else:
-                        remove_member(target_id)
-                        reply_text = f"🗑 已移除會員：{target_id}"
+                        try:
+                            expires_iso = set_expiry(target_id, date_str)
+                            reply_text = f"✅ 已開通：{target_id}\n到期：{date_str}（到當天 23:59）"
+                        except:
+                            reply_text = "日期格式錯誤，請用 YYYY-MM-DD，例如 2026-03-25"
                 reply_message(reply_token, reply_text)
                 continue
 
@@ -113,9 +113,17 @@ def webhook():
                 reply_text = (
                     "🌿 理性陪跑研究室｜加入方式\n\n"
                     "請完成付款後，回覆我：『付款後五碼』\n"
-                    "我會幫你加入會員名單。\n\n"
-                    "（V1 版本先採人工加入）"
+                    "我會幫你開通會員並設定到期日。\n\n"
+                    "（V1 先採人工開通）"
                 )
+
+            elif text == "我的到期日":
+                exp = get_expiry(user_id)
+                if not exp:
+                    reply_text = "你目前不是會員。輸入「加入陪跑」了解加入方式。"
+                else:
+                    # 只顯示日期
+                    reply_text = f"⏳ 你的到期時間（UTC）：\n{exp}"
 
             elif text == "今日陪跑":
                 if not is_member(user_id):
@@ -137,7 +145,7 @@ def webhook():
                         "我們只是一起練習用理性看待運氣。"
                     )
             else:
-                reply_text = "輸入：今日陪跑 / 加入陪跑"
+                reply_text = "輸入：今日陪跑 / 加入陪跑 / 我的到期日"
 
             reply_message(reply_token, reply_text)
 
