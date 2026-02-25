@@ -1,3 +1,28 @@
+from flask import Flask, request
+import os
+import json
+import requests
+
+app = Flask(__name__)
+
+CHANNEL_ACCESS_TOKEN = os.getenv("CHANNEL_ACCESS_TOKEN")
+
+def reply_message(reply_token, text):
+    url = "https://api.line.me/v2/bot/message/reply"
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {CHANNEL_ACCESS_TOKEN}",
+    }
+    payload = {
+        "replyToken": reply_token,
+        "messages": [{"type": "text", "text": text}],
+    }
+    requests.post(url, headers=headers, data=json.dumps(payload), timeout=10)
+
+@app.route("/")
+def home():
+    return "Bot is running."
+
 @app.route("/webhook", methods=["POST"])
 def webhook():
     body = request.get_json(silent=True) or {}
@@ -15,9 +40,8 @@ def webhook():
             reply_token = event.get("replyToken")
 
             user_id = event.get("source", {}).get("userId", "")
-            print("LINE userId:", user_id)  # 會出現在 Render Logs
+            print("LINE userId:", user_id)
 
-            # 從環境變數讀會員清單：用逗號分隔
             members_raw = os.getenv("MEMBER_LINE_IDS", "")
             member_ids = [x.strip() for x in members_raw.split(",") if x.strip()]
             is_member = user_id in member_ids
@@ -29,7 +53,6 @@ def webhook():
                     "請回覆我：你的付款後五碼（或你的暱稱），我會幫你開通。\n\n"
                     "（下一步我們再把這段改成你的收款連結）"
                 )
-
             elif text == "今日陪跑":
                 if not is_member:
                     reply_text = (
