@@ -4,6 +4,7 @@ import json
 import requests
 import sqlite3
 from datetime import datetime, timezone
+from datetime import timedelta
 
 app = Flask(__name__)
 
@@ -24,21 +25,22 @@ def init_db():
     conn.close()
 
 def set_expiry(user_id: str, expires_at_yyyy_mm_dd: str):
-    # expires_at 存成 UTC 的當天 23:59:59
-    dt = datetime.strptime(expires_at_yyyy_mm_dd, "%Y-%m-%d").replace(
-        hour=23, minute=59, second=59, tzinfo=timezone.utc
+    # 台灣時間 GMT+8 的當天 23:59:59
+    tz_tw = timezone(timedelta(hours=8))
+    dt_tw = datetime.strptime(expires_at_yyyy_mm_dd, "%Y-%m-%d").replace(
+        hour=23, minute=59, second=59, tzinfo=tz_tw
     )
+    # 存進 DB 用 ISO（含 +08:00）
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
     cur.execute("""
         INSERT INTO members (user_id, expires_at)
         VALUES (?, ?)
         ON CONFLICT(user_id) DO UPDATE SET expires_at=excluded.expires_at
-    """, (user_id, dt.isoformat()))
+    """, (user_id, dt_tw.isoformat()))
     conn.commit()
     conn.close()
-    return dt.isoformat()
-
+    return dt_tw.isoformat()
 def get_expiry(user_id: str):
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
@@ -118,13 +120,13 @@ def webhook():
                 )
 
             elif text == "我的到期日":
-                exp = get_expiry(user_id)
-                if not exp:
-                    reply_text = "你目前不是會員。輸入「加入陪跑」了解加入方式。"
-                else:
-                    # 只顯示日期
-                    reply_text = f"⏳ 你的到期時間（UTC）：\n{exp}"
-
+    exp = get_expiry(user_id)
+    if not exp:
+        reply_text = "你目前不是會員。輸入「加入陪跑」了解加入方式。"
+    else:
+        dt = datetime.fromisoformat(exp)
+        # 顯示成台灣時間 YYYY-MM-DD HH:MM
+        reply_text = "⏳ 你的到期時間（台灣時間）：\n" + dt.strftime("%Y-%m-%d %H:%M")
             elif text == "今日陪跑":
                 if not is_member(user_id):
                     reply_text = (
