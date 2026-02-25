@@ -15,6 +15,47 @@ DB_PATH = "members.db"
 TZ_TW = timezone(timedelta(hours=8))
 
 # =========================
+# 每日陪跑語錄（同一天固定一句）
+# =========================
+QUOTES = [
+    "紀律，是把波動變成機會的方法。",
+    "穩定，比爆發更有力量。",
+    "情緒會波動，紀律不應該。",
+    "真正的優勢來自長期執行。",
+    "不是追高，而是守住節奏。",
+    "理性，是對抗不確定性的武器。",
+    "慢，比快更接近成功。",
+    "不要因為上一期改變原則。",
+    "決策只做一次，紀律每天重複。",
+    "運氣會變，結構會留下痕跡。",
+    "短期波動，不代表長期方向。",
+    "真正的陪跑，是控制風險。",
+    "穩定，是最高級的策略。",
+    "冷靜，是最大的勝率。",
+    "模型給方向，紀律給結果。",
+    "不追連莊，不補情緒。",
+    "節奏，比衝動重要。",
+    "數據說話，情緒沉默。",
+    "長期主義，永遠勝出。",
+    "看清結構，再做決定。",
+    "不要被上一期牽著走。",
+    "一次選擇，一次紀律。",
+    "堅持模型，拒絕焦躁。",
+    "穩住，是最高級操作。",
+    "把風險留在門外。",
+    "不是賭，是紀律實驗。",
+    "決策清晰，結果自然。",
+    "耐心，是隱形優勢。",
+    "陪跑，是為了穩定。",
+    "今天也只做一個決定。"
+]
+
+def get_daily_quote():
+    today = datetime.now(TZ_TW).date()
+    index = today.toordinal() % len(QUOTES)
+    return QUOTES[index]
+
+# =========================
 # DB
 # =========================
 def init_db():
@@ -195,7 +236,6 @@ def seed_synthetic_539_draws_if_empty():
             if k != j:
                 zone_bias[k] = max(0.85, zone_bias[k] - 0.15)
 
-        # 依照 zone_bias 決定本期 5 個號碼落在哪些區
         picked_zones = rng.choices(zones, weights=zone_bias, k=5)
 
         nums = set()
@@ -446,25 +486,29 @@ def webhook():
                     reply_message(reply_token, "⏳ 你的到期時間（台灣時間）：\n" + dt.strftime("%Y-%m-%d %H:%M"))
                 continue
 
-            # ===== 今日陪跑（會員限定，穩定模型，熱區/熱號/一組號碼）=====
+            # ===== 今日陪跑（會員限定，高端研究室風 + 每日語錄）=====
             if text == "今日陪跑":
                 if not is_member(user_id):
                     reply_message(reply_token, "🌿 今日陪跑屬於會員內容\n\n請先輸入：遊戲帳號 XXXXX")
                 else:
                     pack = get_or_build_today_pick()
-                    today_str = datetime.now(TZ_TW).strftime("%m/%d")
+                    today_str = datetime.now(TZ_TW).strftime("%Y.%m.%d")
+                    quote = get_daily_quote()
 
                     reply_message(
                         reply_token,
-                        "🌿 理性陪跑研究室｜" + today_str + "\n\n"
-                        "📊 結構觀察\n"
-                        f"近30期熱區：{pack['hot_zone']}\n"
-                        f"近30期熱號：{pack['top_hot']}\n\n"
-                        "🧠 理性提醒\n"
-                        "紀律比直覺重要，今天只做一次決定。\n\n"
-                        "✨ 今日陪跑建議\n"
+                        "【理性陪跑研究室】\n"
+                        f"{today_str}\n\n"
+                        "▍結構分析\n"
+                        f"近30期活躍區段：{pack['hot_zone']}\n"
+                        f"高頻樣本集中：{pack['top_hot']}\n\n"
+                        "▍本日模型建議\n"
                         f"{pack['numbers']}\n\n"
-                        "（數據陪跑參考，非保證）"
+                        "模型來源：\n"
+                        "240期頻率 × 30期熱度加權\n\n"
+                        "—— 今日陪跑語錄 ——\n"
+                        f"{quote}\n\n"
+                        "（數據結構參考，非保證）"
                     )
                 continue
 
