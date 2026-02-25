@@ -3,14 +3,14 @@ import os
 import json
 import requests
 import sqlite3
-from datetime import datetime, timezone
-from datetime import timedelta
+from datetime import datetime, timezone, timedelta
 
 app = Flask(__name__)
 
 CHANNEL_ACCESS_TOKEN = os.getenv("CHANNEL_ACCESS_TOKEN")
 ADMIN_SECRET = os.getenv("ADMIN_SECRET", "1234")
 DB_PATH = "members.db"
+
 
 def init_db():
     conn = sqlite3.connect(DB_PATH)
@@ -24,13 +24,17 @@ def init_db():
     conn.commit()
     conn.close()
 
+
 def set_expiry(user_id: str, expires_at_yyyy_mm_dd: str):
-    # 台灣時間 GMT+8 的當天 23:59:59
+    """
+    用台灣時間（GMT+8）設定到期日：到該日 23:59:59。
+    DB 存 ISO 格式（含 +08:00）。
+    """
     tz_tw = timezone(timedelta(hours=8))
     dt_tw = datetime.strptime(expires_at_yyyy_mm_dd, "%Y-%m-%d").replace(
         hour=23, minute=59, second=59, tzinfo=tz_tw
     )
-    # 存進 DB 用 ISO（含 +08:00）
+
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
     cur.execute("""
@@ -40,7 +44,10 @@ def set_expiry(user_id: str, expires_at_yyyy_mm_dd: str):
     """, (user_id, dt_tw.isoformat()))
     conn.commit()
     conn.close()
-    return dt_tw.isoformat()
+
+    return dt_tw
+
+
 def get_expiry(user_id: str):
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
@@ -49,12 +56,16 @@ def get_expiry(user_id: str):
     conn.close()
     return row[0] if row else None
 
+
 def is_member(user_id: str) -> bool:
     exp = get_expiry(user_id)
     if not exp:
         return False
-    expires_at = datetime.fromisoformat(exp)
-    return expires_at > datetime.now(timezone.utc)
+
+    expires_at = datetime.fromisoformat(exp)  # 含 +08:00
+    now_tw = datetime.now(expires_at.tzinfo)
+    return expires_at > now_tw
+
 
 def reply_message(reply_token, text):
     url = "https://api.line.me/v2/bot/message/reply"
@@ -68,9 +79,11 @@ def reply_message(reply_token, text):
     }
     requests.post(url, headers=headers, data=json.dumps(payload), timeout=10)
 
+
 @app.route("/")
 def home():
     return "Bot is running."
+
 
 @app.route("/webhook", methods=["POST"])
 def webhook():
@@ -82,6 +95,7 @@ def webhook():
         for event in events:
             if event.get("type") != "message":
                 continue
+
             message = event.get("message", {})
             if message.get("type") != "text":
                 continue
@@ -89,28 +103,42 @@ def webhook():
             text = (message.get("text") or "").strip()
             reply_token = event.get("replyToken")
             user_id = event.get("source", {}).get("userId", "")
+
+            # 你在 Render Logs 可以看到 userId（用來開通會員）
             print("LINE userId:", user_id)
 
-            # 管理指令：開通 <userId> <YYYY-MM-DD> <密碼>
+            # ======================
+            # 管理指令：開通
+            # 格式：開通 <userId> <YYYY-MM-DD> <管理密碼>
             # 例：開通 Uxxxx 2026-03-25 xp839
+            # ======================
             if text.startswith("開通 "):
                 parts = text.split()
                 if len(parts) != 4:
-                    reply_text = "格式：開通 <userId> <YYYY-MM-DD> <管理密碼>\n例：開通 Uxxxx 2026-03-25 xp839"
+                    reply_text = (
+                        "格式：開通 <userId> <YYYY-MM-DD> <管理密碼>\n"
+                        "例：開通 Uxxxx 2026-03-25 xp839"
+                    )
                 else:
                     _, target_id, date_str, secret = parts
                     if secret != ADMIN_SECRET:
                         reply_text = "管理密碼錯誤。"
                     else:
                         try:
-                            expires_iso = set_expiry(target_id, date_str)
-                            reply_text = f"✅ 已開通：{target_id}\n到期：{date_str}（到當天 23:59）"
-                        except:
+                            dt_tw = set_expiry(target_id, date_str)
+                            reply_text = (
+                                f"✅ 已開通：{target_id}\n"
+                                f"到期（台灣時間）：{dt_tw.strftime('%Y-%m-%d %H:%M')}"
+                            )
+                        except Exception:
                             reply_text = "日期格式錯誤，請用 YYYY-MM-DD，例如 2026-03-25"
+
                 reply_message(reply_token, reply_text)
                 continue
 
+            # ======================
             # 使用者指令
+            # ======================
             if text == "加入陪跑":
                 reply_text = (
                     "🌿 理性陪跑研究室｜加入方式\n\n"
@@ -120,13 +148,13 @@ def webhook():
                 )
 
             elif text == "我的到期日":
-    exp = get_expiry(user_id)
-    if not exp:
-        reply_text = "你目前不是會員。輸入「加入陪跑」了解加入方式。"
-    else:
-        dt = datetime.fromisoformat(exp)
-        # 顯示成台灣時間 YYYY-MM-DD HH:MM
-        reply_text = "⏳ 你的到期時間（台灣時間）：\n" + dt.strftime("%Y-%m-%d %H:%M")
+                exp = get_expiry(user_id)
+                if not exp:
+                    reply_text = "你目前不是會員。輸入「加入陪跑」了解加入方式。"
+                else:
+                    dt = datetime.fromisoformat(exp)
+                    reply_text = "⏳ 你的到期時間（台灣時間）：\n" + dt.strftime("%Y-%m-%d %H:%M")
+
             elif text == "今日陪跑":
                 if not is_member(user_id):
                     reply_text = (
@@ -146,6 +174,7 @@ def webhook():
                         "02 09 21 28 37\n\n"
                         "我們只是一起練習用理性看待運氣。"
                     )
+
             else:
                 reply_text = "輸入：今日陪跑 / 加入陪跑 / 我的到期日"
 
