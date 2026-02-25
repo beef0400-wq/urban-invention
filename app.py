@@ -26,10 +26,6 @@ def init_db():
 
 
 def set_expiry(user_id: str, expires_at_yyyy_mm_dd: str):
-    """
-    用台灣時間（GMT+8）設定到期日：到該日 23:59:59。
-    DB 存 ISO 格式（含 +08:00）。
-    """
     tz_tw = timezone(timedelta(hours=8))
     dt_tw = datetime.strptime(expires_at_yyyy_mm_dd, "%Y-%m-%d").replace(
         hour=23, minute=59, second=59, tzinfo=tz_tw
@@ -62,7 +58,7 @@ def is_member(user_id: str) -> bool:
     if not exp:
         return False
 
-    expires_at = datetime.fromisoformat(exp)  # 含 +08:00
+    expires_at = datetime.fromisoformat(exp)
     now_tw = datetime.now(expires_at.tzinfo)
     return expires_at > now_tw
 
@@ -104,13 +100,24 @@ def webhook():
             reply_token = event.get("replyToken")
             user_id = event.get("source", {}).get("userId", "")
 
-            # 你在 Render Logs 可以看到 userId（用來開通會員）
             print("LINE userId:", user_id)
 
             # ======================
-            # 管理指令：開通
-            # 格式：開通 <userId> <YYYY-MM-DD> <管理密碼>
-            # 例：開通 Uxxxx 2026-03-25 xp839
+            # 使用者：加入會員（自動回傳 userId）
+            # ======================
+            if text == "加入會員":
+                reply_text = (
+                    "🌿 會員申請資訊\n\n"
+                    "你的 LINE ID：\n"
+                    f"{user_id}\n\n"
+                    "請將此 ID 傳給管理員完成開通。"
+                )
+                reply_message(reply_token, reply_text)
+                continue
+
+            # ======================
+            # 管理員：開通會員
+            # 開通 <userId> <YYYY-MM-DD> <密碼>
             # ======================
             if text.startswith("開通 "):
                 parts = text.split()
@@ -130,53 +137,39 @@ def webhook():
                                 f"✅ 已開通：{target_id}\n"
                                 f"到期（台灣時間）：{dt_tw.strftime('%Y-%m-%d %H:%M')}"
                             )
-                        except Exception:
-                            reply_text = "日期格式錯誤，請用 YYYY-MM-DD，例如 2026-03-25"
+                        except:
+                            reply_text = "日期格式錯誤，請用 YYYY-MM-DD"
 
                 reply_message(reply_token, reply_text)
                 continue
 
             # ======================
-            # 使用者指令
+            # 使用者功能
             # ======================
-            if text == "加入陪跑":
-                reply_text = (
-                    "🌿 理性陪跑研究室｜加入方式\n\n"
-                    "請完成付款後，回覆我：『付款後五碼』\n"
-                    "我會幫你開通會員並設定到期日。\n\n"
-                    "（V1 先採人工開通）"
-                )
-
-            elif text == "我的到期日":
+            if text == "我的到期日":
                 exp = get_expiry(user_id)
                 if not exp:
-                    reply_text = "你目前不是會員。輸入「加入陪跑」了解加入方式。"
+                    reply_text = "你目前不是會員。"
                 else:
                     dt = datetime.fromisoformat(exp)
                     reply_text = "⏳ 你的到期時間（台灣時間）：\n" + dt.strftime("%Y-%m-%d %H:%M")
 
             elif text == "今日陪跑":
                 if not is_member(user_id):
-                    reply_text = (
-                        "🌿 今日陪跑屬於會員內容\n\n"
-                        "想加入『理性陪跑研究室』請輸入：加入陪跑"
-                    )
+                    reply_text = "🌿 今日陪跑屬於會員內容，請先加入會員。"
                 else:
                     reply_text = (
                         "🌿 理性陪跑研究室（會員版）\n\n"
                         "📊 今日觀察\n"
-                        "先穩穩看趨勢，不追不壓。\n\n"
-                        "🧠 理性提醒\n"
-                        "數據只是方向，不是答案。\n\n"
+                        "穩住節奏，不追高。\n\n"
                         "✨ 今日陪跑靈感\n"
                         "03 14 22 31 39\n"
                         "07 11 18 26 33\n"
-                        "02 09 21 28 37\n\n"
-                        "我們只是一起練習用理性看待運氣。"
+                        "02 09 21 28 37"
                     )
 
             else:
-                reply_text = "輸入：今日陪跑 / 加入陪跑 / 我的到期日"
+                reply_text = "輸入：加入會員 / 今日陪跑 / 我的到期日"
 
             reply_message(reply_token, reply_text)
 
