@@ -2,16 +2,17 @@ from flask import Flask, request
 import os
 import json
 import requests
-import sqlite3
 import random
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta, timezone
+import psycopg2
+from psycopg2.extras import RealDictCursor
 
 app = Flask(__name__)
 
 CHANNEL_ACCESS_TOKEN = os.getenv("CHANNEL_ACCESS_TOKEN")
 ADMIN_SECRET = os.getenv("ADMIN_SECRET", "1234")
+DATABASE_URL = os.getenv("DATABASE_URL")  # Render Postgres 給你的那串
 
-DB_PATH = "members.db"
 TZ_TW = timezone(timedelta(hours=8))
 
 # =========================
@@ -52,54 +53,56 @@ QUOTES = [
 
 def get_daily_quote():
     today = datetime.now(TZ_TW).date()
-    index = today.toordinal() % len(QUOTES)
-    return QUOTES[index]
+    idx = today.toordinal() % len(QUOTES)
+    return QUOTES[idx]
 
 # =========================
-# DB
+# Postgres 連線 & 建表
 # =========================
+def get_conn():
+    if not DATABASE_URL:
+        raise RuntimeError("DATABASE_URL 未設定。請到 Render 環境變數加入 DATABASE_URL")
+    # Render 多數情況需要 SSL
+    return psycopg2.connect(DATABASE_URL, sslmode="require")
+
 def init_db():
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_conn()
     cur = conn.cursor()
-
-    # 會員：到期（台灣時間 ISO）
+    # members
     cur.execute("""
         CREATE TABLE IF NOT EXISTS members (
             user_id TEXT PRIMARY KEY,
-            expires_at TEXT NOT NULL
-        )
+            expires_at TIMESTAMPTZ NOT NULL
+        );
     """)
-
-    # 待確認：遊戲帳號 -> user_id
+    # pending_accounts
     cur.execute("""
         CREATE TABLE IF NOT EXISTS pending_accounts (
             game_account TEXT PRIMARY KEY,
             user_id TEXT NOT NULL,
-            created_at TEXT NOT NULL
-        )
+            created_at TIMESTAMPTZ NOT NULL
+        );
     """)
-
-    # 539 歷史（合成資料或未來可改真實資料）：日期 + 五碼字串 "01 02 03 04 05"
+    # lotto_539_draws（穩定模型合成資料）
     cur.execute("""
         CREATE TABLE IF NOT EXISTS lotto_539_draws (
-            draw_date TEXT PRIMARY KEY,
+            draw_date DATE PRIMARY KEY,
             numbers TEXT NOT NULL
-        )
+        );
     """)
-
-    # 今日陪跑快取（同一天固定一組）
+    # daily_pick_cache
     cur.execute("""
         CREATE TABLE IF NOT EXISTS daily_pick_cache (
-            pick_date TEXT PRIMARY KEY,
+            pick_date DATE PRIMARY KEY,
             numbers TEXT NOT NULL,
             hot_zone TEXT NOT NULL,
             top_hot TEXT NOT NULL,
             note TEXT NOT NULL,
-            created_at TEXT NOT NULL
-        )
+            created_at TIMESTAMPTZ NOT NULL
+        );
     """)
-
     conn.commit()
+    cur.close()
     conn.close()
 
 # =========================
@@ -120,115 +123,114 @@ def reply_message(reply_token, text):
 def set_expiry_plus_days(user_id: str, days: int = 30):
     now_tw = datetime.now(TZ_TW)
     target_date = (now_tw + timedelta(days=days)).date()
-
     dt_tw = datetime.strptime(target_date.strftime("%Y-%m-%d"), "%Y-%m-%d").replace(
         hour=23, minute=59, second=59, tzinfo=TZ_TW
     )
 
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_conn()
     cur = conn.cursor()
     cur.execute("""
         INSERT INTO members (user_id, expires_at)
-        VALUES (?, ?)
-        ON CONFLICT(user_id) DO UPDATE SET expires_at=excluded.expires_at
-    """, (user_id, dt_tw.isoformat()))
+        VALUES (%s, %s)
+        ON CONFLICT (user_id) DO UPDATE SET expires_at = EXCLUDED.expires_at;
+    """, (user_id, dt_tw))
     conn.commit()
+    cur.close()
     conn.close()
-
     return dt_tw
 
 def get_expiry(user_id: str):
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_conn()
     cur = conn.cursor()
-    cur.execute("SELECT expires_at FROM members WHERE user_id = ?", (user_id,))
+    cur.execute("SELECT expires_at FROM members WHERE user_id = %s;", (user_id,))
     row = cur.fetchone()
+    cur.close()
     conn.close()
-    return row[0] if row else None
+    return row[0] if row else None  # datetime
 
 def is_member(user_id: str) -> bool:
     exp = get_expiry(user_id)
     if not exp:
         return False
-    expires_at = datetime.fromisoformat(exp)  # 含 +08:00
-    now_tw = datetime.now(expires_at.tzinfo)
-    return expires_at > now_tw
+    # exp 是 timestamptz（帶 tz），用台灣時間比較
+    now_tw = datetime.now(TZ_TW)
+    # exp 轉到台灣時區比較
+    exp_tw = exp.astimezone(TZ_TW)
+    return exp_tw > now_tw
 
 # =========================
 # 待確認帳號
 # =========================
 def save_pending_account(game_account: str, user_id: str):
-    created_at = datetime.now(TZ_TW).isoformat()
-    conn = sqlite3.connect(DB_PATH)
+    created_at = datetime.now(TZ_TW)
+
+    conn = get_conn()
     cur = conn.cursor()
     cur.execute("""
         INSERT INTO pending_accounts (game_account, user_id, created_at)
-        VALUES (?, ?, ?)
-        ON CONFLICT(game_account) DO UPDATE SET user_id=excluded.user_id, created_at=excluded.created_at
+        VALUES (%s, %s, %s)
+        ON CONFLICT (game_account) DO UPDATE
+        SET user_id = EXCLUDED.user_id,
+            created_at = EXCLUDED.created_at;
     """, (game_account, user_id, created_at))
     conn.commit()
+    cur.close()
     conn.close()
 
 def pop_pending_user_id(game_account: str):
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_conn()
     cur = conn.cursor()
-    cur.execute("SELECT user_id FROM pending_accounts WHERE game_account = ?", (game_account,))
+    cur.execute("SELECT user_id FROM pending_accounts WHERE game_account = %s;", (game_account,))
     row = cur.fetchone()
     if not row:
+        cur.close()
         conn.close()
         return None
 
     user_id = row[0]
-    cur.execute("DELETE FROM pending_accounts WHERE game_account = ?", (game_account,))
+    cur.execute("DELETE FROM pending_accounts WHERE game_account = %s;", (game_account,))
     conn.commit()
+    cur.close()
     conn.close()
     return user_id
 
 def get_latest_pending(limit=50):
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_conn()
     cur = conn.cursor()
     cur.execute("""
         SELECT game_account, user_id, created_at
         FROM pending_accounts
         ORDER BY created_at DESC
-        LIMIT ?
+        LIMIT %s;
     """, (limit,))
     rows = cur.fetchall()
+    cur.close()
     conn.close()
-    return rows
+    return rows  # list of tuples
 
 # =========================
 # 539 穩定資料：若 DB 沒資料就生成合成歷史
 # =========================
 def seed_synthetic_539_draws_if_empty():
-    """
-    穩定模型版：如果 DB 沒有任何 539 歷史資料，就自動生成 240 期合成歷史資料入庫。
-    - 不依賴外部 API
-    - 永遠不會顯示「資料暫不可用」
-    - 有熱區漂移/波動，讓熱區/熱號看起來合理
-    """
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_conn()
     cur = conn.cursor()
-    cur.execute("SELECT COUNT(1) FROM lotto_539_draws")
+    cur.execute("SELECT COUNT(1) FROM lotto_539_draws;")
     cnt = cur.fetchone()[0]
-
     if cnt and cnt > 0:
+        cur.close()
         conn.close()
         return
 
     today = datetime.now(TZ_TW).date()
+    rng = random.Random(539_539_539)
 
-    base_seed = 539_539_539
-    rng = random.Random(base_seed)
-
-    # 三區偏好會慢慢漂移：1-13 / 14-26 / 27-39
     zone_bias = [1.0, 1.0, 1.0]
     zones = ["1-13", "14-26", "27-39"]
 
     rows = []
     for i in range(240):
-        d = (today - timedelta(days=i)).isoformat()
+        d = today - timedelta(days=i)
 
-        # 每 20 天小幅漂移一次
         if i % 20 == 0 and i != 0:
             j = rng.randrange(3)
             zone_bias[j] += 0.25
@@ -251,27 +253,29 @@ def seed_synthetic_539_draws_if_empty():
             nums.add(rng.randint(1, 39))
 
         nums_sorted = sorted(nums)[:5]
-        rows.append((d, " ".join([f"{n:02d}" for n in nums_sorted])))
+        s = " ".join([f"{n:02d}" for n in nums_sorted])
+        rows.append((d, s))
 
-    for d, s in rows:
-        cur.execute("""
-            INSERT OR REPLACE INTO lotto_539_draws (draw_date, numbers)
-            VALUES (?, ?)
-        """, (d, s))
-
+    cur.executemany("""
+        INSERT INTO lotto_539_draws (draw_date, numbers)
+        VALUES (%s, %s)
+        ON CONFLICT (draw_date) DO UPDATE SET numbers = EXCLUDED.numbers;
+    """, rows)
     conn.commit()
+    cur.close()
     conn.close()
 
 def load_539_draws(limit=240):
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_conn()
     cur = conn.cursor()
     cur.execute("""
         SELECT draw_date, numbers
         FROM lotto_539_draws
         ORDER BY draw_date DESC
-        LIMIT ?
+        LIMIT %s;
     """, (limit,))
     rows = cur.fetchall()
+    cur.close()
     conn.close()
 
     parsed = []
@@ -343,23 +347,24 @@ def weighted_pick(freq_long, freq_short, k=5):
     return " ".join([f"{n:02d}" for n in sorted(chosen)])
 
 def get_or_build_today_pick():
-    today = datetime.now(TZ_TW).date().isoformat()
+    today = datetime.now(TZ_TW).date()
 
     # 先讀快取
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_conn()
     cur = conn.cursor()
     cur.execute("""
         SELECT numbers, hot_zone, top_hot, note
         FROM daily_pick_cache
-        WHERE pick_date = ?
+        WHERE pick_date = %s;
     """, (today,))
     row = cur.fetchone()
+    cur.close()
     conn.close()
 
     if row:
         return {"numbers": row[0], "hot_zone": row[1], "top_hot": row[2], "note": row[3], "date": today}
 
-    # 確保有歷史資料（沒有就生成合成）
+    # 確保有歷史資料（沒有就生成）
     seed_synthetic_539_draws_if_empty()
 
     draws_240 = load_539_draws(limit=240)
@@ -367,19 +372,25 @@ def get_or_build_today_pick():
 
     hot_zone, top_hot, f30 = hot_zone_and_hotnums(d30)
     f240 = freq_240(draws_240)
-
     numbers = weighted_pick(f240, f30, k=5)
-    note = "模型：近240期頻率(60%) + 近30期熱度(40%) 加權抽樣（非保證）"
 
-    created_at = datetime.now(TZ_TW).isoformat()
-    conn = sqlite3.connect(DB_PATH)
+    note = "模型：近240期頻率(60%) + 近30期熱度(40%) 加權抽樣（非保證）"
+    created_at = datetime.now(TZ_TW)
+
+    conn = get_conn()
     cur = conn.cursor()
     cur.execute("""
-        INSERT OR REPLACE INTO daily_pick_cache
-        (pick_date, numbers, hot_zone, top_hot, note, created_at)
-        VALUES (?, ?, ?, ?, ?, ?)
+        INSERT INTO daily_pick_cache (pick_date, numbers, hot_zone, top_hot, note, created_at)
+        VALUES (%s, %s, %s, %s, %s, %s)
+        ON CONFLICT (pick_date) DO UPDATE SET
+            numbers = EXCLUDED.numbers,
+            hot_zone = EXCLUDED.hot_zone,
+            top_hot = EXCLUDED.top_hot,
+            note = EXCLUDED.note,
+            created_at = EXCLUDED.created_at;
     """, (today, numbers, hot_zone, top_hot, note, created_at))
     conn.commit()
+    cur.close()
     conn.close()
 
     return {"numbers": numbers, "hot_zone": hot_zone, "top_hot": top_hot, "note": note, "date": today}
@@ -401,7 +412,6 @@ def webhook():
         for event in events:
             if event.get("type") != "message":
                 continue
-
             message = event.get("message", {})
             if message.get("type") != "text":
                 continue
@@ -410,7 +420,7 @@ def webhook():
             reply_token = event.get("replyToken")
             user_id = event.get("source", {}).get("userId", "")
 
-            # ===== 會員：送遊戲帳號 =====
+            # 會員：送遊戲帳號
             if text.startswith("遊戲帳號 "):
                 parts = text.split(maxsplit=1)
                 if len(parts) != 2 or not parts[1].strip():
@@ -425,47 +435,49 @@ def webhook():
                         "請等待管理員確認開通。\n"
                         "（開通後可輸入：今日陪跑 / 我的到期日）"
                     )
-                continue
+                return "OK"
 
-            # ===== 管理員：列出待確認50筆 =====
+            # 管理員：列出待確認50筆
             if text.startswith("待確認 "):
                 parts = text.split()
                 if len(parts) != 2 or parts[1] != ADMIN_SECRET:
                     reply_message(reply_token, "管理密碼錯誤。")
-                    continue
+                    return "OK"
 
                 rows = get_latest_pending(50)
                 if not rows:
                     reply_message(reply_token, "目前沒有待確認帳號。")
-                    continue
+                    return "OK"
 
                 msg = "📋 最近待確認帳號（最多50筆）\n\n"
                 for ga, uid, ts in rows:
+                    # ts 是 datetime
+                    ts_str = ts.astimezone(TZ_TW).strftime("%Y-%m-%d %H:%M")
                     msg += (
                         f"帳號：{ga}\n"
                         f"userId：{uid}\n"
-                        f"時間：{ts[:16]}\n"
+                        f"時間：{ts_str}\n"
                         "-----------------\n"
                     )
                 reply_message(reply_token, msg[:5000])
-                continue
+                return "OK"
 
-            # ===== 管理員：確認開通（+30天）=====
+            # 管理員：確認開通（+30天）
             if text.startswith("確認 "):
                 parts = text.split()
                 if len(parts) != 3:
                     reply_message(reply_token, "格式：確認 <遊戲帳號> <管理密碼>\n例：確認 ABC123 xp839")
-                    continue
+                    return "OK"
 
                 _, game_account, secret = parts
                 if secret != ADMIN_SECRET:
                     reply_message(reply_token, "管理密碼錯誤。")
-                    continue
+                    return "OK"
 
                 target_user_id = pop_pending_user_id(game_account)
                 if not target_user_id:
                     reply_message(reply_token, f"找不到待確認帳號：{game_account}\n（請先讓會員輸入：遊戲帳號 {game_account}）")
-                    continue
+                    return "OK"
 
                 dt_tw = set_expiry_plus_days(target_user_id, 30)
                 reply_message(
@@ -474,19 +486,19 @@ def webhook():
                     f"帳號：{game_account}\n"
                     f"到期（台灣時間）：{dt_tw.strftime('%Y-%m-%d %H:%M')}"
                 )
-                continue
+                return "OK"
 
-            # ===== 會員：查到期 =====
+            # 會員：查到期
             if text == "我的到期日":
                 exp = get_expiry(user_id)
                 if not exp:
                     reply_message(reply_token, "你目前尚未開通。\n請先輸入：遊戲帳號 XXXXX")
                 else:
-                    dt = datetime.fromisoformat(exp)
-                    reply_message(reply_token, "⏳ 你的到期時間（台灣時間）：\n" + dt.strftime("%Y-%m-%d %H:%M"))
-                continue
+                    exp_tw = exp.astimezone(TZ_TW)
+                    reply_message(reply_token, "⏳ 你的到期時間（台灣時間）：\n" + exp_tw.strftime("%Y-%m-%d %H:%M"))
+                return "OK"
 
-            # ===== 今日陪跑（會員限定，高端研究室風 + 每日語錄）=====
+            # 今日陪跑（會員限定，高端研究室風 + 每日語錄）
             if text == "今日陪跑":
                 if not is_member(user_id):
                     reply_message(reply_token, "🌿 今日陪跑屬於會員內容\n\n請先輸入：遊戲帳號 XXXXX")
@@ -510,9 +522,9 @@ def webhook():
                         f"{quote}\n\n"
                         "（數據結構參考，非保證）"
                     )
-                continue
+                return "OK"
 
-            # ===== 指令 =====
+            # 指令
             if text in ("指令", "help", "HELP"):
                 reply_message(
                     reply_token,
@@ -525,9 +537,10 @@ def webhook():
                     "1) 待確認 密碼\n"
                     "2) 確認 XXXXX 密碼"
                 )
-                continue
+                return "OK"
 
             reply_message(reply_token, "輸入「指令」查看功能。")
+            return "OK"
 
     except Exception as e:
         print("Webhook error:", e)
