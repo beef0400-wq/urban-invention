@@ -414,6 +414,18 @@ def home():
 
 @app.route("/webhook", methods=["POST"])
 def webhook():
+    @app.route("/webhook", methods=["POST"])
+def webhook():
+    body = request.get_json(silent=True) or {}
+    print("WEBHOOK HIT. keys:", list(body.keys()))
+
+    try:
+        init_db()
+    except Exception as e:
+        print("INIT_DB ERROR:", repr(e))
+        return "OK"   # 先保證 LINE verify 不會 500
+
+    # 下面維持你原本程式...
     init_db()
     body = request.get_json(silent=True) or {}
     events = body.get("events", [])
