@@ -114,9 +114,19 @@ def reply_message(reply_token, text):
         "Content-Type": "application/json",
         "Authorization": f"Bearer {CHANNEL_ACCESS_TOKEN}",
     }
-    payload = {"replyToken": reply_token, "messages": [{"type": "text", "text": text}]}
-    requests.post(url, headers=headers, data=json.dumps(payload), timeout=10)
+    payload = {
+        "replyToken": reply_token,
+        "messages": [{"type": "text", "text": text}],
+    }
 
+    try:
+        r = requests.post(url, headers=headers, data=json.dumps(payload), timeout=10)
+        print("==== LINE REPLY DEBUG ====")
+        print("Status:", r.status_code)
+        print("Body:", r.text)
+        print("==========================")
+    except Exception as e:
+        print("LINE reply exception:", e)
 # =========================
 # 會員系統
 # =========================
