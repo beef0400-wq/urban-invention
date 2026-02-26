@@ -1,15 +1,19 @@
-from flask import Flask, request
+from flask import Flask, request, abort
 import os
 import json
 import requests
 import random
+import base64
+import hashlib
+import hmac
 from datetime import datetime, timedelta, timezone
 import psycopg2
 
 app = Flask(__name__)
 
-# ========= 必要環境變數 =========
+# ========= 環境變數 =========
 CHANNEL_ACCESS_TOKEN = os.getenv("CHANNEL_ACCESS_TOKEN", "").strip()
+CHANNEL_SECRET = os.getenv("CHANNEL_SECRET", "").strip()
 ADMIN_SECRET = os.getenv("ADMIN_SECRET", "1234").strip()
 DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
 
@@ -57,12 +61,21 @@ def get_daily_quote():
     return QUOTES[idx]
 
 # =========================
+# LINE Signature 驗證
+# =========================
+def verify_line_signature(raw_body: bytes, signature: str) -> bool:
+    if not CHANNEL_SECRET:
+        return False
+    mac = hmac.new(CHANNEL_SECRET.encode("utf-8"), raw_body, hashlib.sha256).digest()
+    expected = base64.b64encode(mac).decode("utf-8")
+    return hmac.compare_digest(expected, signature or "")
+
+# =========================
 # Postgres
 # =========================
 def get_conn():
     if not DATABASE_URL:
         raise RuntimeError("DATABASE_URL 未設定（Render 環境變數）")
-    # Render 通常需要 SSL
     return psycopg2.connect(DATABASE_URL, sslmode="require")
 
 def init_db():
@@ -107,11 +120,11 @@ def init_db():
     conn.close()
 
 # =========================
-# LINE Reply（含 debug）
+# LINE Reply（正式版）
 # =========================
-def reply_message(reply_token, text):
+def reply_message(reply_token: str, text: str):
     if not CHANNEL_ACCESS_TOKEN:
-        print("CHANNEL_ACCESS_TOKEN is empty. Cannot reply.")
+        print("ERROR: CHANNEL_ACCESS_TOKEN empty")
         return
 
     url = "https://api.line.me/v2/bot/message/reply"
@@ -123,10 +136,8 @@ def reply_message(reply_token, text):
 
     try:
         r = requests.post(url, headers=headers, data=json.dumps(payload), timeout=10)
-        print("==== LINE REPLY DEBUG ====")
-        print("Status:", r.status_code)
-        print("Body:", r.text[:500])
-        print("==========================")
+        if r.status_code >= 400:
+            print("LINE reply failed:", r.status_code, r.text[:300])
     except Exception as e:
         print("LINE reply exception:", repr(e))
 
@@ -159,7 +170,7 @@ def get_expiry(user_id: str):
     row = cur.fetchone()
     cur.close()
     conn.close()
-    return row[0] if row else None  # datetime
+    return row[0] if row else None
 
 def is_member(user_id: str) -> bool:
     exp = get_expiry(user_id)
@@ -405,11 +416,14 @@ def home():
 
 @app.route("/webhook", methods=["POST"])
 def webhook():
-    # ✅ 保險：永遠先回 OK，不要讓 Verify 500
+    raw = request.get_data()
+    signature = request.headers.get("X-Line-Signature", "")
+
+    if not verify_line_signature(raw, signature):
+        abort(403)
+
     body = request.get_json(silent=True) or {}
     events = body.get("events", [])
-
-    print("WEBHOOK HIT. keys:", list(body.keys()))
 
     try:
         init_db()
@@ -417,134 +431,142 @@ def webhook():
         print("INIT_DB ERROR:", repr(e))
         return "OK"
 
-    try:
-        for event in events:
-            if event.get("type") != "message":
-                continue
-            message = event.get("message", {})
-            if message.get("type") != "text":
-                continue
+    for event in events:
+        if event.get("type") != "message":
+            continue
+        message = event.get("message", {})
+        if message.get("type") != "text":
+            continue
 
-            text = (message.get("text") or "").strip()
-            reply_token = event.get("replyToken")
-            user_id = event.get("source", {}).get("userId", "")
+        text = (message.get("text") or "").strip()
+        reply_token = event.get("replyToken")
+        user_id = event.get("source", {}).get("userId", "")
 
-            # 會員：送遊戲帳號
-            if text.startswith("遊戲帳號 "):
-                parts = text.split(maxsplit=1)
-                if len(parts) != 2 or not parts[1].strip():
-                    reply_message(reply_token, "格式：遊戲帳號 XXXXX")
-                else:
-                    game_account = parts[1].strip()
-                    save_pending_account(game_account, user_id)
-                    reply_message(
-                        reply_token,
-                        "✅ 已收到你的遊戲帳號\n\n"
-                        f"帳號：{game_account}\n\n"
-                        "請等待管理員確認開通。\n"
-                        "（開通後可輸入：今日陪跑 / 我的到期日）"
-                    )
-                continue
+        # ===== 新增：申請加入會員 自動回覆 =====
+        if text == "申請加入會員":
+            reply_message(
+                reply_token,
+                "請輸入:\n"
+                "(遊戲帳號 XXXXXX)\n"
+                "X為3A帳號 ()內都要輸入\n\n"
+                "範例: 遊戲帳號 123456"
+            )
+            continue
 
-            # 管理員：列出待確認50筆
-            if text.startswith("待確認 "):
-                parts = text.split()
-                if len(parts) != 2 or parts[1] != ADMIN_SECRET:
-                    reply_message(reply_token, "管理密碼錯誤。")
-                    continue
+        # 指令
+        if text in ("指令", "help", "HELP"):
+            reply_message(
+                reply_token,
+                "📌 指令\n\n"
+                "會員：\n"
+                "1) 申請加入會員\n"
+                "2) 遊戲帳號 XXXXX\n"
+                "3) 今日陪跑\n"
+                "4) 我的到期日\n\n"
+                "管理員：\n"
+                "1) 待確認 密碼\n"
+                "2) 確認 XXXXX 密碼"
+            )
+            continue
 
-                rows = get_latest_pending(50)
-                if not rows:
-                    reply_message(reply_token, "目前沒有待確認帳號。")
-                    continue
-
-                msg = "📋 最近待確認帳號（最多50筆）\n\n"
-                for ga, uid, ts in rows:
-                    ts_str = ts.astimezone(TZ_TW).strftime("%Y-%m-%d %H:%M")
-                    msg += f"帳號：{ga}\nuserId：{uid}\n時間：{ts_str}\n-----------------\n"
-                reply_message(reply_token, msg[:5000])
-                continue
-
-            # 管理員：確認開通（+30天）
-            if text.startswith("確認 "):
-                parts = text.split()
-                if len(parts) != 3:
-                    reply_message(reply_token, "格式：確認 <遊戲帳號> <管理密碼>\n例：確認 ABC123 xp839")
-                    continue
-
-                _, game_account, secret = parts
-                if secret != ADMIN_SECRET:
-                    reply_message(reply_token, "管理密碼錯誤。")
-                    continue
-
-                target_user_id = pop_pending_user_id(game_account)
-                if not target_user_id:
-                    reply_message(reply_token, f"找不到待確認帳號：{game_account}\n（請先讓會員輸入：遊戲帳號 {game_account}）")
-                    continue
-
-                dt_tw = set_expiry_plus_days(target_user_id, 30)
+        # 會員：送遊戲帳號
+        if text.startswith("遊戲帳號 "):
+            parts = text.split(maxsplit=1)
+            if len(parts) != 2 or not parts[1].strip():
+                reply_message(reply_token, "格式：遊戲帳號 XXXXX")
+            else:
+                game_account = parts[1].strip()
+                save_pending_account(game_account, user_id)
                 reply_message(
                     reply_token,
-                    "✅ 已開通\n\n"
-                    f"帳號：{game_account}\n"
-                    f"到期（台灣時間）：{dt_tw.strftime('%Y-%m-%d %H:%M')}"
+                    "✅ 已收到你的申請加入會員\n\n"
+                    f"帳號：{game_account}\n\n"
+                    "請等待管理員確認開通。\n"
+                    "（開通後可輸入：今日陪跑 / 我的到期日）"
                 )
+            continue
+
+        # 管理員：列出待確認50筆
+        if text.startswith("待確認 "):
+            parts = text.split()
+            if len(parts) != 2 or parts[1] != ADMIN_SECRET:
+                reply_message(reply_token, "管理密碼錯誤。")
                 continue
 
-            # 會員：查到期
-            if text == "我的到期日":
-                exp = get_expiry(user_id)
-                if not exp:
-                    reply_message(reply_token, "你目前尚未開通。\n請先輸入：遊戲帳號 XXXXX")
-                else:
-                    exp_tw = exp.astimezone(TZ_TW)
-                    reply_message(reply_token, "⏳ 你的到期時間（台灣時間）：\n" + exp_tw.strftime("%Y-%m-%d %H:%M"))
+            rows = get_latest_pending(50)
+            if not rows:
+                reply_message(reply_token, "目前沒有待確認帳號。")
                 continue
 
-            # 今日陪跑
-            if text == "今日陪跑":
-                if not is_member(user_id):
-                    reply_message(reply_token, "🌿 今日陪跑屬於會員內容\n\n請先輸入：遊戲帳號 XXXXX")
-                else:
-                    pack = get_or_build_today_pick()
-                    today_str = datetime.now(TZ_TW).strftime("%Y.%m.%d")
-                    quote = get_daily_quote()
+            msg = "📋 最近待確認帳號（最多50筆）\n\n"
+            for ga, uid, ts in rows:
+                ts_str = ts.astimezone(TZ_TW).strftime("%Y-%m-%d %H:%M")
+                msg += f"帳號：{ga}\nuserId：{uid}\n時間：{ts_str}\n-----------------\n"
+            reply_message(reply_token, msg[:5000])
+            continue
 
-                    reply_message(
-                        reply_token,
-                        "【理性陪跑研究室】\n"
-                        f"{today_str}\n\n"
-                        "▍結構分析\n"
-                        f"近30期活躍區段：{pack['hot_zone']}\n"
-                        f"高頻樣本集中：{pack['top_hot']}\n\n"
-                        "▍本日模型建議\n"
-                        f"{pack['numbers']}\n\n"
-                        "模型來源：\n"
-                        "240期頻率 × 30期熱度加權\n\n"
-                        "—— 今日陪跑語錄 ——\n"
-                        f"{quote}\n\n"
-                        "（數據結構參考，非保證）"
-                    )
+        # 管理員：確認開通（+30天）
+        if text.startswith("確認 "):
+            parts = text.split()
+            if len(parts) != 3:
+                reply_message(reply_token, "格式：確認 <遊戲帳號> <管理密碼>\n例：確認 ABC123 xp839")
                 continue
 
-            # 指令
-            if text in ("指令", "help", "HELP"):
+            _, game_account, secret = parts
+            if secret != ADMIN_SECRET:
+                reply_message(reply_token, "管理密碼錯誤。")
+                continue
+
+            target_user_id = pop_pending_user_id(game_account)
+            if not target_user_id:
+                reply_message(reply_token, f"找不到待確認帳號：{game_account}\n（請先讓會員輸入：遊戲帳號 {game_account}）")
+                continue
+
+            dt_tw = set_expiry_plus_days(target_user_id, 30)
+            reply_message(
+                reply_token,
+                "✅ 已開通\n\n"
+                f"帳號：{game_account}\n"
+                f"到期（台灣時間）：{dt_tw.strftime('%Y-%m-%d %H:%M')}"
+            )
+            continue
+
+        # 會員：查到期
+        if text == "我的到期日":
+            exp = get_expiry(user_id)
+            if not exp:
+                reply_message(reply_token, "你目前尚未開通。\n請先輸入：遊戲帳號 XXXXX")
+            else:
+                exp_tw = exp.astimezone(TZ_TW)
+                reply_message(reply_token, "⏳ 你的到期時間（台灣時間）：\n" + exp_tw.strftime("%Y-%m-%d %H:%M"))
+            continue
+
+        # 今日陪跑（會員限定）
+        if text == "今日陪跑":
+            if not is_member(user_id):
+                reply_message(reply_token, "🌿 今日陪跑屬於會員內容\n\n請先輸入：遊戲帳號 XXXXX")
+            else:
+                pack = get_or_build_today_pick()
+                today_str = datetime.now(TZ_TW).strftime("%Y.%m.%d")
+                quote = get_daily_quote()
+
                 reply_message(
                     reply_token,
-                    "📌 指令\n\n"
-                    "會員：\n"
-                    "1) 遊戲帳號 XXXXX\n"
-                    "2) 今日陪跑\n"
-                    "3) 我的到期日\n\n"
-                    "管理員：\n"
-                    "1) 待確認 密碼\n"
-                    "2) 確認 XXXXX 密碼"
+                    "【理性陪跑研究室】\n"
+                    f"{today_str}\n\n"
+                    "▍結構分析\n"
+                    f"近30期活躍區段：{pack['hot_zone']}\n"
+                    f"高頻樣本集中：{pack['top_hot']}\n\n"
+                    "▍本日模型建議\n"
+                    f"{pack['numbers']}\n\n"
+                    "模型來源：\n"
+                    "240期頻率 × 30期熱度加權\n\n"
+                    "—— 今日陪跑語錄 ——\n"
+                    f"{quote}\n\n"
+                    "（數據結構參考，非保證）"
                 )
-                continue
+            continue
 
-            reply_message(reply_token, "輸入「指令」查看功能。")
-
-    except Exception as e:
-        print("WEBHOOK ERROR:", repr(e))
+        reply_message(reply_token, "輸入「指令」查看功能。")
 
     return "OK"
