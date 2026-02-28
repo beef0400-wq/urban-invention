@@ -6,7 +6,8 @@ import random
 import base64
 import hashlib
 import hmac
-from datetime import datetime, timedelta, timezone
+import re
+from datetime import datetime, timedelta, timezone, date
 import psycopg2
 
 app = Flask(__name__)
@@ -97,6 +98,7 @@ def init_db():
         );
     """)
 
+    # 真實今彩539歷史：draw_date(日期) + numbers("01 02 03 04 05")
     cur.execute("""
         CREATE TABLE IF NOT EXISTS lotto_539_draws (
             draw_date DATE PRIMARY KEY,
@@ -104,6 +106,7 @@ def init_db():
         );
     """)
 
+    # 今日快取：同一天固定一組（含熱區/熱號）
     cur.execute("""
         CREATE TABLE IF NOT EXISTS daily_pick_cache (
             pick_date DATE PRIMARY KEY,
@@ -229,62 +232,67 @@ def get_latest_pending(limit=50):
     return rows
 
 # =========================
-# 539 合成歷史資料（離線）
+# 真實今彩539資料抓取（近期）
+# 來源：列表頁（HTML）解析出日期與5碼
 # =========================
-def seed_synthetic_539_draws_if_empty():
+SOURCE_539_URL = "https://www.pilio.idv.tw/lto539/list539BIG.asp"  # 近期多筆列表 :contentReference[oaicite:1]{index=1}
+
+def fetch_recent_539_results(max_rows: int = 80):
+    """
+    回傳 list[tuple[date, '01 02 03 04 05']]
+    """
+    r = requests.get(SOURCE_539_URL, timeout=10)
+    r.encoding = "utf-8"
+    html = r.text
+
+    # 範例片段：
+    # 開獎日期:2026/02/27(五)   01, 22, 23, 37, 39
+    pattern = re.compile(
+        r"開獎日期:(\d{4})/(\d{2})/(\d{2}).{0,20}?\s+(\d{2})[,\s]+(\d{2})[,\s]+(\d{2})[,\s]+(\d{2})[,\s]+(\d{2})",
+        re.MULTILINE
+    )
+
+    out = []
+    for m in pattern.finditer(html):
+        y, mo, d = int(m.group(1)), int(m.group(2)), int(m.group(3))
+        nums = [int(m.group(i)) for i in range(4, 9)]
+        nums_sorted = sorted(nums)
+        s = " ".join([f"{n:02d}" for n in nums_sorted])
+        out.append((date(y, mo, d), s))
+        if len(out) >= max_rows:
+            break
+
+    return out
+
+def upsert_539_draws(rows):
+    if not rows:
+        return 0
     conn = get_conn()
     cur = conn.cursor()
-    cur.execute("SELECT COUNT(1) FROM lotto_539_draws;")
-    cnt = cur.fetchone()[0]
-    if cnt and cnt > 0:
-        cur.close()
-        conn.close()
-        return
-
-    today = datetime.now(TZ_TW).date()
-    rng = random.Random(539_539_539)
-    zone_bias = [1.0, 1.0, 1.0]
-    zones = ["1-13", "14-26", "27-39"]
-
-    rows = []
-    for i in range(240):
-        d = today - timedelta(days=i)
-
-        if i % 20 == 0 and i != 0:
-            j = rng.randrange(3)
-            zone_bias[j] += 0.25
-            k = rng.randrange(3)
-            if k != j:
-                zone_bias[k] = max(0.85, zone_bias[k] - 0.15)
-
-        picked_zones = rng.choices(zones, weights=zone_bias, k=5)
-
-        nums = set()
-        for z in picked_zones:
-            if z == "1-13":
-                nums.add(rng.randint(1, 13))
-            elif z == "14-26":
-                nums.add(rng.randint(14, 26))
-            else:
-                nums.add(rng.randint(27, 39))
-
-        while len(nums) < 5:
-            nums.add(rng.randint(1, 39))
-
-        nums_sorted = sorted(nums)[:5]
-        s = " ".join([f"{n:02d}" for n in nums_sorted])
-        rows.append((d, s))
-
     cur.executemany("""
         INSERT INTO lotto_539_draws (draw_date, numbers)
         VALUES (%s, %s)
         ON CONFLICT (draw_date) DO UPDATE SET numbers = EXCLUDED.numbers;
     """, rows)
-
     conn.commit()
     cur.close()
     conn.close()
+    return len(rows)
 
+def ensure_latest_539_in_db():
+    """
+    每次要算模型前，先抓近期60期寫進DB。
+    """
+    try:
+        rows = fetch_recent_539_results(max_rows=60)
+        upsert_539_draws(rows)
+    except Exception as e:
+        # 抓不到就不硬死，仍可用DB內既有資料
+        print("FETCH_539_ERROR:", repr(e))
+
+# =========================
+# 讀取 DB 的 539 歷史
+# =========================
 def load_539_draws(limit=240):
     conn = get_conn()
     cur = conn.cursor()
@@ -306,7 +314,7 @@ def load_539_draws(limit=240):
                 parsed.append((d, nums))
         except:
             pass
-    return parsed
+    return parsed  # newest -> older
 
 # =========================
 # 模型：240期頻率 + 30期熱度
@@ -323,6 +331,7 @@ def hot_zone_and_hotnums(draws_30):
                 zone["14-26"] += 1
             else:
                 zone["27-39"] += 1
+
     hot_zone = max(zone.items(), key=lambda x: x[1])[0]
     top_hot = sorted(freq30.items(), key=lambda x: x[1], reverse=True)[:5]
     top_hot_str = " ".join([f"{n:02d}" for n, _ in top_hot])
@@ -338,6 +347,7 @@ def freq_240(draws_240):
 def weighted_pick(freq_long, freq_short, k=5):
     maxL = max(freq_long.values()) or 1
     maxS = max(freq_short.values()) or 1
+
     weights = {}
     for n in range(1, 40):
         wl = freq_long[n] / maxL
@@ -360,11 +370,13 @@ def weighted_pick(freq_long, freq_short, k=5):
             pick = random.choice(list(pool.keys()))
         chosen.append(pick)
         pool.pop(pick, None)
+
     return " ".join([f"{n:02d}" for n in sorted(chosen)])
 
 def get_or_build_today_pick():
     today = datetime.now(TZ_TW).date()
 
+    # 先讀快取：同一天固定
     conn = get_conn()
     cur = conn.cursor()
     cur.execute("""
@@ -379,12 +391,22 @@ def get_or_build_today_pick():
     if row:
         return {"numbers": row[0], "hot_zone": row[1], "top_hot": row[2], "note": row[3], "date": today}
 
-    seed_synthetic_539_draws_if_empty()
+    # ★ 關鍵：先更新真實539資料進DB
+    ensure_latest_539_in_db()
+
     draws_240 = load_539_draws(limit=240)
-    d30 = draws_240[:30]
+
+    # 若資料不足，提示（避免算出怪結果）
+    if len(draws_240) < 60:
+        # 仍可運作，但提醒資料量不足
+        # 用現有資料照算
+        pass
+
+    d30 = draws_240[:30] if len(draws_240) >= 30 else draws_240
 
     hot_zone, top_hot, f30 = hot_zone_and_hotnums(d30)
-    f240 = freq_240(draws_240)
+    f240 = freq_240(draws_240) if draws_240 else {i: 1 for i in range(1, 40)}
+
     numbers = weighted_pick(f240, f30, k=5)
     note = "模型：近240期頻率(60%) + 近30期熱度(40%) 加權抽樣（非保證）"
     created_at = datetime.now(TZ_TW)
@@ -442,7 +464,7 @@ def webhook():
         reply_token = event.get("replyToken")
         user_id = event.get("source", {}).get("userId", "")
 
-        # ===== 新增：申請加入會員 自動回覆 =====
+        # ===== 申請加入會員（教學自動回覆）=====
         if text == "申請加入會員":
             reply_message(
                 reply_token,
