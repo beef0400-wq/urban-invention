@@ -599,7 +599,6 @@ def fetch_recent_bingo_results(max_rows: int = 60):
 
 
 def bingo_zone_summary(draws):
-    # 1-20 / 21-40 / 41-60 / 61-80
     zones = {"1-20": 0, "21-40": 0, "41-60": 0, "61-80": 0}
     freq = {i: 0 for i in range(1, 81)}
 
@@ -658,7 +657,6 @@ def _weighted_pick_bingo(freq_dict, seed_text: str):
 def get_bingo_analysis_bundle():
     draws = fetch_recent_bingo_results(max_rows=30)
     if not draws:
-        # fallback
         return {
             "one": "07 19 34 52 71",
             "five": "05 22 31 46 68",
@@ -686,7 +684,6 @@ def get_bingo_analysis_bundle():
     five = _weighted_pick_bingo(freq5, f"{seed_base}-b5-{_time_bucket(15)}")
     ten = _weighted_pick_bingo(freq10, f"{seed_base}-b10-{_time_bucket(25)}")
 
-    # 保證三組不同
     seen = {one}
     if five in seen:
         five = _weighted_pick_bingo(freq5, f"{seed_base}-b5-alt-{_time_bucket(15)}")
@@ -784,15 +781,18 @@ def format_bingo_latest_push():
         return None, None
 
     latest_numbers = " ".join([f"{n:02d}" for n in latest["numbers"]])
+
     msg = (
-        "【Bingo Bingo 即時分析】\n\n"
+        "【理性陪跑研究室｜Bingo Bingo 即時分析】\n\n"
         f"最新期別：{latest['period']}\n"
         f"開獎時間：{latest['time']}\n\n"
-        "剛開獎結果\n"
+        "▍剛開獎結果\n"
         f"{latest_numbers}\n\n"
-        "▍下一期分析\n"
-        f"{b['one']}\n\n"
-        "—— 理性陪跑 ——\n"
+        "▍下一期短線模型\n"
+        f"建議號碼：{b['one']}\n"
+        f"活躍區段：{b['one_zone']}\n"
+        f"高頻樣本：{b['one_hot']}\n\n"
+        "—— 理性陪跑提醒 ——\n"
         "不要因為上一期改變節奏。"
     )
     return latest["period"], msg
@@ -820,7 +820,6 @@ def cron_daily_push():
         now = datetime.now(TZ_TW)
         today_key = now.strftime("%Y-%m-%d")
 
-        # 539：週日不推
         if now.weekday() != 6:
             key_539 = f"daily_539_{today_key}"
             if get_push_state(key_539) is None:
@@ -829,7 +828,6 @@ def cron_daily_push():
                     push_message(uid, msg539)
                 set_push_state(key_539, "done")
 
-        # Bingo：每天都推
         key_bingo = f"daily_bingo_{today_key}"
         if get_push_state(key_bingo) is None:
             msg_bingo = format_bingo_evening_push()
@@ -852,7 +850,6 @@ def cron_check_bingo():
     try:
         init_db()
 
-        # 只在官方開獎時段內檢查
         now = datetime.now(TZ_TW)
         hhmm = now.strftime("%H:%M")
         if hhmm < "07:05" or hhmm > "23:55":
