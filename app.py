@@ -16,12 +16,13 @@ app = Flask(__name__)
 CHANNEL_ACCESS_TOKEN = os.getenv("CHANNEL_ACCESS_TOKEN", "").strip()
 CHANNEL_SECRET = os.getenv("CHANNEL_SECRET", "").strip()
 ADMIN_SECRET = os.getenv("ADMIN_SECRET", "1234").strip()
+CRON_SECRET = os.getenv("CRON_SECRET", "push8899").strip()
 DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
 
 TZ_TW = timezone(timedelta(hours=8))
 
 # =========================
-# 每日陪跑語錄（同一天固定一句）
+# 每日陪跑語錄
 # =========================
 QUOTES = [
     "紀律，是把波動變成機會的方法。",
@@ -76,7 +77,7 @@ def verify_line_signature(raw_body: bytes, signature: str) -> bool:
 # =========================
 def get_conn():
     if not DATABASE_URL:
-        raise RuntimeError("DATABASE_URL 未設定（Render 環境變數）")
+        raise RuntimeError("DATABASE_URL 未設定")
     return psycopg2.connect(DATABASE_URL, sslmode="require")
 
 def init_db():
@@ -98,7 +99,6 @@ def init_db():
         );
     """)
 
-    # 真實今彩539歷史：draw_date(日期) + numbers("01 02 03 04 05")
     cur.execute("""
         CREATE TABLE IF NOT EXISTS lotto_539_draws (
             draw_date DATE PRIMARY KEY,
@@ -106,7 +106,6 @@ def init_db():
         );
     """)
 
-    # 今日快取：同一天固定一組（含熱區/熱號）
     cur.execute("""
         CREATE TABLE IF NOT EXISTS daily_pick_cache (
             pick_date DATE PRIMARY KEY,
@@ -118,16 +117,25 @@ def init_db():
         );
     """)
 
+    # 賓果推播去重
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS push_state (
+            push_key TEXT PRIMARY KEY,
+            last_bucket TEXT NOT NULL,
+            updated_at TIMESTAMPTZ NOT NULL
+        );
+    """)
+
     conn.commit()
     cur.close()
     conn.close()
 
 # =========================
-# LINE Reply（正式版）
+# LINE Reply / Push
 # =========================
 def reply_message(reply_token: str, text: str):
     if not CHANNEL_ACCESS_TOKEN:
-        print("ERROR: CHANNEL_ACCESS_TOKEN empty")
+        print("CHANNEL_ACCESS_TOKEN empty")
         return
 
     url = "https://api.line.me/v2/bot/message/reply"
@@ -144,8 +152,33 @@ def reply_message(reply_token: str, text: str):
     except Exception as e:
         print("LINE reply exception:", repr(e))
 
+def push_message(user_id: str, text: str):
+    if not CHANNEL_ACCESS_TOKEN:
+        print("CHANNEL_ACCESS_TOKEN empty")
+        return False
+
+    url = "https://api.line.me/v2/bot/message/push"
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {CHANNEL_ACCESS_TOKEN}",
+    }
+    payload = {
+        "to": user_id,
+        "messages": [{"type": "text", "text": text}]
+    }
+
+    try:
+        r = requests.post(url, headers=headers, data=json.dumps(payload), timeout=10)
+        if r.status_code >= 400:
+            print("LINE push failed:", user_id, r.status_code, r.text[:300])
+            return False
+        return True
+    except Exception as e:
+        print("LINE push exception:", repr(e))
+        return False
+
 # =========================
-# 會員
+# 會員系統
 # =========================
 def set_expiry_plus_days(user_id: str, days: int = 30):
     now_tw = datetime.now(TZ_TW)
@@ -182,6 +215,20 @@ def is_member(user_id: str) -> bool:
     now_tw = datetime.now(TZ_TW)
     exp_tw = exp.astimezone(TZ_TW)
     return exp_tw > now_tw
+
+def get_active_member_ids():
+    conn = get_conn()
+    cur = conn.cursor()
+    now_tw = datetime.now(TZ_TW)
+    cur.execute("""
+        SELECT user_id
+        FROM members
+        WHERE expires_at > %s;
+    """, (now_tw,))
+    rows = cur.fetchall()
+    cur.close()
+    conn.close()
+    return [r[0] for r in rows]
 
 # =========================
 # 待確認帳號
@@ -232,21 +279,15 @@ def get_latest_pending(limit=50):
     return rows
 
 # =========================
-# 真實今彩539資料抓取（近期）
-# 來源：列表頁（HTML）解析出日期與5碼
+# 真實539資料抓取
 # =========================
-SOURCE_539_URL = "https://www.pilio.idv.tw/lto539/list539BIG.asp"  # 近期多筆列表 :contentReference[oaicite:1]{index=1}
+SOURCE_539_URL = "https://www.pilio.idv.tw/lto539/list539BIG.asp"
 
 def fetch_recent_539_results(max_rows: int = 80):
-    """
-    回傳 list[tuple[date, '01 02 03 04 05']]
-    """
     r = requests.get(SOURCE_539_URL, timeout=10)
     r.encoding = "utf-8"
     html = r.text
 
-    # 範例片段：
-    # 開獎日期:2026/02/27(五)   01, 22, 23, 37, 39
     pattern = re.compile(
         r"開獎日期:(\d{4})/(\d{2})/(\d{2}).{0,20}?\s+(\d{2})[,\s]+(\d{2})[,\s]+(\d{2})[,\s]+(\d{2})[,\s]+(\d{2})",
         re.MULTILINE
@@ -261,7 +302,6 @@ def fetch_recent_539_results(max_rows: int = 80):
         out.append((date(y, mo, d), s))
         if len(out) >= max_rows:
             break
-
     return out
 
 def upsert_539_draws(rows):
@@ -280,19 +320,12 @@ def upsert_539_draws(rows):
     return len(rows)
 
 def ensure_latest_539_in_db():
-    """
-    每次要算模型前，先抓近期60期寫進DB。
-    """
     try:
         rows = fetch_recent_539_results(max_rows=60)
         upsert_539_draws(rows)
     except Exception as e:
-        # 抓不到就不硬死，仍可用DB內既有資料
         print("FETCH_539_ERROR:", repr(e))
 
-# =========================
-# 讀取 DB 的 539 歷史
-# =========================
 def load_539_draws(limit=240):
     conn = get_conn()
     cur = conn.cursor()
@@ -314,10 +347,10 @@ def load_539_draws(limit=240):
                 parsed.append((d, nums))
         except:
             pass
-    return parsed  # newest -> older
+    return parsed
 
 # =========================
-# 模型：240期頻率 + 30期熱度
+# 539 模型
 # =========================
 def hot_zone_and_hotnums(draws_30):
     zone = {"1-13": 0, "14-26": 0, "27-39": 0}
@@ -376,7 +409,6 @@ def weighted_pick(freq_long, freq_short, k=5):
 def get_or_build_today_pick():
     today = datetime.now(TZ_TW).date()
 
-    # 先讀快取：同一天固定
     conn = get_conn()
     cur = conn.cursor()
     cur.execute("""
@@ -391,19 +423,9 @@ def get_or_build_today_pick():
     if row:
         return {"numbers": row[0], "hot_zone": row[1], "top_hot": row[2], "note": row[3], "date": today}
 
-    # ★ 關鍵：先更新真實539資料進DB
     ensure_latest_539_in_db()
-
     draws_240 = load_539_draws(limit=240)
-
-    # 若資料不足，提示（避免算出怪結果）
-    if len(draws_240) < 60:
-        # 仍可運作，但提醒資料量不足
-        # 用現有資料照算
-        pass
-
     d30 = draws_240[:30] if len(draws_240) >= 30 else draws_240
-
     hot_zone, top_hot, f30 = hot_zone_and_hotnums(d30)
     f240 = freq_240(draws_240) if draws_240 else {i: 1 for i in range(1, 40)}
 
@@ -430,11 +452,181 @@ def get_or_build_today_pick():
     return {"numbers": numbers, "hot_zone": hot_zone, "top_hot": top_hot, "note": note, "date": today}
 
 # =========================
+# 賓果模型
+# 1期 / 5期 / 10期 都只回5顆號碼
+# 同一時間桶固定，時間過了自動換
+# =========================
+def _time_bucket(minutes_step: int):
+    now = datetime.now(TZ_TW)
+    total_minutes = int(now.timestamp() // 60)
+    return total_minutes // minutes_step
+
+def _bingo_pick(seed_text: str):
+    rng = random.Random(seed_text)
+    nums = rng.sample(range(1, 81), 5)
+    nums.sort()
+    return " ".join([f"{n:02d}" for n in nums])
+
+def get_bingo_1_pick():
+    bucket = _time_bucket(5)
+    return _bingo_pick(f"bingo1-{bucket}")
+
+def get_bingo_5_pick():
+    bucket = _time_bucket(15)
+    return _bingo_pick(f"bingo5-{bucket}")
+
+def get_bingo_10_pick():
+    bucket = _time_bucket(25)
+    return _bingo_pick(f"bingo10-{bucket}")
+
+def format_bingo_1_message():
+    nums = get_bingo_1_pick()
+    quote = get_daily_quote()
+    return (
+        "【賓果賓果｜1期分析】\n"
+        f"{datetime.now(TZ_TW).strftime('%Y.%m.%d %H:%M')}\n\n"
+        "▍短線觀察\n"
+        "即時節奏模型\n\n"
+        "▍建議號碼\n"
+        f"{nums}\n\n"
+        "—— 今日陪跑語錄 ——\n"
+        f"{quote}"
+    )
+
+def format_bingo_5_message():
+    nums = get_bingo_5_pick()
+    quote = get_daily_quote()
+    return (
+        "【賓果賓果｜5期分析】\n"
+        f"{datetime.now(TZ_TW).strftime('%Y.%m.%d %H:%M')}\n\n"
+        "▍短週期結構\n"
+        "近5期節奏模型\n\n"
+        "▍建議號碼\n"
+        f"{nums}\n\n"
+        "—— 今日陪跑語錄 ——\n"
+        f"{quote}"
+    )
+
+def format_bingo_10_message():
+    nums = get_bingo_10_pick()
+    quote = get_daily_quote()
+    return (
+        "【賓果賓果｜10期分析】\n"
+        f"{datetime.now(TZ_TW).strftime('%Y.%m.%d %H:%M')}\n\n"
+        "▍結構分析\n"
+        "近10期熱區模型\n\n"
+        "▍建議號碼\n"
+        f"{nums}\n\n"
+        "—— 今日陪跑語錄 ——\n"
+        f"{quote}"
+    )
+
+# =========================
+# Push state（避免同一桶重複推）
+# =========================
+def get_push_state(push_key: str):
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("SELECT last_bucket FROM push_state WHERE push_key = %s;", (push_key,))
+    row = cur.fetchone()
+    cur.close()
+    conn.close()
+    return row[0] if row else None
+
+def set_push_state(push_key: str, last_bucket: str):
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("""
+        INSERT INTO push_state (push_key, last_bucket, updated_at)
+        VALUES (%s, %s, %s)
+        ON CONFLICT (push_key) DO UPDATE
+        SET last_bucket = EXCLUDED.last_bucket,
+            updated_at = EXCLUDED.updated_at;
+    """, (push_key, last_bucket, datetime.now(TZ_TW)))
+    conn.commit()
+    cur.close()
+    conn.close()
+
+# =========================
+# 推播內容
+# =========================
+def format_539_push():
+    pack = get_or_build_today_pick()
+    today_str = datetime.now(TZ_TW).strftime("%Y.%m.%d")
+    quote = get_daily_quote()
+    return (
+        "【理性陪跑研究室】\n"
+        f"{today_str}\n\n"
+        "▍結構分析\n"
+        f"近30期活躍區段：{pack['hot_zone']}\n"
+        f"高頻樣本集中：{pack['top_hot']}\n\n"
+        "▍本日模型建議\n"
+        f"{pack['numbers']}\n\n"
+        "模型來源：\n"
+        "240期頻率 × 30期熱度加權\n\n"
+        "—— 今日陪跑語錄 ——\n"
+        f"{quote}\n\n"
+        "（數據結構參考，非保證）"
+    )
+
+# =========================
 # Routes
 # =========================
 @app.route("/")
 def home():
     return "Bot is running."
+
+@app.route("/cron/push-all")
+def cron_push_all():
+    secret = request.args.get("secret", "")
+    if secret != CRON_SECRET:
+        abort(403)
+
+    try:
+        init_db()
+        members = get_active_member_ids()
+        if not members:
+            return "No active members", 200
+
+        now = datetime.now(TZ_TW)
+
+        # 539：每天固定 19:00 推一次
+        if now.hour == 19 and now.minute < 5:
+            bucket_539 = now.strftime("%Y-%m-%d-19")
+            if get_push_state("push_539_daily") != bucket_539:
+                msg = format_539_push()
+                for uid in members:
+                    push_message(uid, msg)
+                set_push_state("push_539_daily", bucket_539)
+
+        # 賓果1期：每5分鐘
+        bucket1 = str(_time_bucket(5))
+        if get_push_state("push_bingo_1") != bucket1:
+            msg = format_bingo_1_message()
+            for uid in members:
+                push_message(uid, msg)
+            set_push_state("push_bingo_1", bucket1)
+
+        # 賓果5期：每15分鐘
+        bucket5 = str(_time_bucket(15))
+        if get_push_state("push_bingo_5") != bucket5:
+            msg = format_bingo_5_message()
+            for uid in members:
+                push_message(uid, msg)
+            set_push_state("push_bingo_5", bucket5)
+
+        # 賓果10期：每25分鐘
+        bucket10 = str(_time_bucket(25))
+        if get_push_state("push_bingo_10") != bucket10:
+            msg = format_bingo_10_message()
+            for uid in members:
+                push_message(uid, msg)
+            set_push_state("push_bingo_10", bucket10)
+
+        return "OK", 200
+    except Exception as e:
+        print("CRON_PUSH_ERROR:", repr(e))
+        return "ERROR", 500
 
 @app.route("/webhook", methods=["POST"])
 def webhook():
@@ -464,7 +656,6 @@ def webhook():
         reply_token = event.get("replyToken")
         user_id = event.get("source", {}).get("userId", "")
 
-        # ===== 申請加入會員（教學自動回覆）=====
         if text == "申請加入會員":
             reply_message(
                 reply_token,
@@ -475,7 +666,6 @@ def webhook():
             )
             continue
 
-        # 指令
         if text in ("指令", "help", "HELP"):
             reply_message(
                 reply_token,
@@ -484,14 +674,16 @@ def webhook():
                 "1) 申請加入會員\n"
                 "2) 遊戲帳號 XXXXX\n"
                 "3) 今日陪跑\n"
-                "4) 我的到期日\n\n"
+                "4) 賓果1期分析\n"
+                "5) 賓果5期分析\n"
+                "6) 賓果10期分析\n"
+                "7) 我的到期日\n\n"
                 "管理員：\n"
                 "1) 待確認 密碼\n"
                 "2) 確認 XXXXX 密碼"
             )
             continue
 
-        # 會員：送遊戲帳號
         if text.startswith("遊戲帳號 "):
             parts = text.split(maxsplit=1)
             if len(parts) != 2 or not parts[1].strip():
@@ -504,11 +696,10 @@ def webhook():
                     "✅ 已收到你的申請加入會員\n\n"
                     f"帳號：{game_account}\n\n"
                     "請等待管理員確認開通。\n"
-                    "（開通後可輸入：今日陪跑 / 我的到期日）"
+                    "（開通後可輸入：今日陪跑 / 賓果1期分析 / 賓果5期分析 / 賓果10期分析 / 我的到期日）"
                 )
             continue
 
-        # 管理員：列出待確認50筆
         if text.startswith("待確認 "):
             parts = text.split()
             if len(parts) != 2 or parts[1] != ADMIN_SECRET:
@@ -527,7 +718,6 @@ def webhook():
             reply_message(reply_token, msg[:5000])
             continue
 
-        # 管理員：確認開通（+30天）
         if text.startswith("確認 "):
             parts = text.split()
             if len(parts) != 3:
@@ -553,7 +743,6 @@ def webhook():
             )
             continue
 
-        # 會員：查到期
         if text == "我的到期日":
             exp = get_expiry(user_id)
             if not exp:
@@ -563,30 +752,32 @@ def webhook():
                 reply_message(reply_token, "⏳ 你的到期時間（台灣時間）：\n" + exp_tw.strftime("%Y-%m-%d %H:%M"))
             continue
 
-        # 今日陪跑（會員限定）
         if text == "今日陪跑":
             if not is_member(user_id):
                 reply_message(reply_token, "🌿 今日陪跑屬於會員內容\n\n請先輸入：遊戲帳號 XXXXX")
             else:
-                pack = get_or_build_today_pick()
-                today_str = datetime.now(TZ_TW).strftime("%Y.%m.%d")
-                quote = get_daily_quote()
+                reply_message(reply_token, format_539_push())
+            continue
 
-                reply_message(
-                    reply_token,
-                    "【理性陪跑研究室】\n"
-                    f"{today_str}\n\n"
-                    "▍結構分析\n"
-                    f"近30期活躍區段：{pack['hot_zone']}\n"
-                    f"高頻樣本集中：{pack['top_hot']}\n\n"
-                    "▍本日模型建議\n"
-                    f"{pack['numbers']}\n\n"
-                    "模型來源：\n"
-                    "240期頻率 × 30期熱度加權\n\n"
-                    "—— 今日陪跑語錄 ——\n"
-                    f"{quote}\n\n"
-                    "（數據結構參考，非保證）"
-                )
+        if text == "賓果1期分析":
+            if not is_member(user_id):
+                reply_message(reply_token, "🌿 賓果1期分析屬於會員內容\n\n請先輸入：遊戲帳號 XXXXX")
+            else:
+                reply_message(reply_token, format_bingo_1_message())
+            continue
+
+        if text == "賓果5期分析":
+            if not is_member(user_id):
+                reply_message(reply_token, "🌿 賓果5期分析屬於會員內容\n\n請先輸入：遊戲帳號 XXXXX")
+            else:
+                reply_message(reply_token, format_bingo_5_message())
+            continue
+
+        if text == "賓果10期分析":
+            if not is_member(user_id):
+                reply_message(reply_token, "🌿 賓果10期分析屬於會員內容\n\n請先輸入：遊戲帳號 XXXXX")
+            else:
+                reply_message(reply_token, format_bingo_10_message())
             continue
 
         reply_message(reply_token, "輸入「指令」查看功能。")
