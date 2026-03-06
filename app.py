@@ -845,34 +845,58 @@ def cron_daily_push():
 def cron_check_bingo():
     secret = request.args.get("secret", "")
     if secret != CRON_SECRET:
-        abort(403)
+        return "Forbidden: bad secret", 403
 
     try:
         init_db()
 
         now = datetime.now(TZ_TW)
         hhmm = now.strftime("%H:%M")
-        if hhmm < "07:05" or hhmm > "23:55":
-            return "Outside draw hours", 200
+        print("CHECK_BINGO NOW:", hhmm)
 
-        period, msg = format_bingo_latest_push()
-        if not period or not msg:
-            return "No latest bingo result", 200
+        if hhmm < "07:05" or hhmm > "23:55":
+            return f"Outside draw hours: {hhmm}", 200
+
+        draws = fetch_recent_bingo_results(max_rows=5)
+        print("BINGO DRAWS COUNT:", len(draws))
+
+        if not draws:
+            return "No bingo data fetched", 200
+
+        latest = draws[0]
+        period = latest["period"]
+        print("LATEST PERIOD:", period)
+        print("LATEST TIME:", latest["time"])
+        print("LATEST NUMBERS:", latest["numbers"])
 
         last_period = get_push_state("latest_bingo_period")
+        print("LAST PUSHED PERIOD:", last_period)
+
         if last_period == period:
-            return "No new result", 200
+            return f"No new result. Current period={period}", 200
 
         users = get_prediction_subscribers()
+        print("SUBSCRIBERS:", users)
+
+        if not users:
+            return f"No prediction subscribers. Current period={period}", 200
+
+        _, msg = format_bingo_latest_push()
+        if not msg:
+            return "Failed to build bingo push message", 200
+
+        success_count = 0
         for uid in users:
-            push_message(uid, msg)
+            ok = push_message(uid, msg)
+            if ok:
+                success_count += 1
 
         set_push_state("latest_bingo_period", period)
-        return "OK", 200
+        return f"OK. period={period}, pushed={success_count}", 200
+
     except Exception as e:
         print("CRON_BINGO_ERROR:", repr(e))
-        return "ERROR", 500
-
+        return f"ERROR: {repr(e)}", 500
 
 # =========================
 # Webhook
