@@ -571,32 +571,41 @@ def format_539_push():
 # Bingo 真實資料
 # =========================
 def fetch_recent_bingo_results(max_rows: int = 60):
-    r = requests.get(SOURCE_BINGO_URL, timeout=10)
-    r.encoding = "utf-8"
-    html = r.text.replace("\xa0", " ")
 
-    pattern = re.compile(
-        r"〖期別:\s*(\d+)〗\s*([0-9,\s]+?)\s*超級獎號.*?\((\d{2}:\d{2})\)",
-        re.S
-    )
+    url = "https://api.taiwanlottery.com/TLCAPIWeB/Lottery/BingoBingoResult"
 
-    out = []
-    for m in pattern.finditer(html):
-        period = m.group(1)
-        numbers_block = m.group(2)
-        draw_time = m.group(3)
-        nums = [int(x) for x in re.findall(r"\d{2}", numbers_block)]
-        nums = nums[:20]
-        if len(nums) == 20:
-            out.append({
+    try:
+        r = requests.get(
+            url,
+            timeout=15,
+            headers={"User-Agent": "Mozilla/5.0"}
+        )
+
+        data = r.json()
+
+        draws = []
+
+        for item in data["content"]["bingoBingoResultList"]:
+
+            period = item["period"]
+            draw_time = item["drawTime"]
+
+            nums = [int(x) for x in item["drawNumber"].split(",")]
+
+            draws.append({
                 "period": period,
                 "time": draw_time,
                 "numbers": sorted(nums)
             })
-        if len(out) >= max_rows:
-            break
-    return out
 
+            if len(draws) >= max_rows:
+                break
+
+        return draws
+
+    except Exception as e:
+        print("BINGO API ERROR:", e)
+        return []
 
 def bingo_zone_summary(draws):
     zones = {"1-20": 0, "21-40": 0, "41-60": 0, "61-80": 0}
