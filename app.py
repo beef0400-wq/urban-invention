@@ -571,41 +571,55 @@ def format_539_push():
 # Bingo 真實資料
 # =========================
 def fetch_recent_bingo_results(max_rows: int = 60):
+    """
+    嘗試用較穩定的 JSON / API 來源抓 Bingo Bingo 最近開獎。
+    若失敗就回空陣列。
+    """
+    candidates = [
+        "https://api.taiwanlottery.com/TLCAPIWeB/Lottery/BingoBingoResult",
+        "https://www.taiwanlottery.com/lotto/BINGOBINGO/drawing.aspx"
+    ]
 
-    url = "https://api.taiwanlottery.com/TLCAPIWeB/Lottery/BingoBingoResult"
+    headers = {"User-Agent": "Mozilla/5.0"}
 
+    # 先嘗試 JSON API
     try:
-        r = requests.get(
-            url,
-            timeout=15,
-            headers={"User-Agent": "Mozilla/5.0"}
-        )
-
+        r = requests.get(candidates[0], timeout=15, headers=headers)
+        r.raise_for_status()
         data = r.json()
 
         draws = []
+        content = data.get("content", {})
+        rows = content.get("bingoBingoResultList", [])
 
-        for item in data["content"]["bingoBingoResultList"]:
+        for item in rows:
+            period = str(item.get("period", "")).strip()
+            draw_time = str(item.get("drawTime", "")).strip()
 
-            period = item["period"]
-            draw_time = item["drawTime"]
+            raw_nums = item.get("drawNumber", "")
+            if isinstance(raw_nums, str):
+                nums = [int(x) for x in raw_nums.split(",") if x.strip().isdigit()]
+            else:
+                nums = []
 
-            nums = [int(x) for x in item["drawNumber"].split(",")]
-
-            draws.append({
-                "period": period,
-                "time": draw_time,
-                "numbers": sorted(nums)
-            })
+            if len(nums) == 20:
+                draws.append({
+                    "period": period,
+                    "time": draw_time,
+                    "numbers": sorted(nums)
+                })
 
             if len(draws) >= max_rows:
                 break
 
-        return draws
+        if draws:
+            return draws
 
     except Exception as e:
-        print("BINGO API ERROR:", e)
-        return []
+        print("BINGO API ERROR:", repr(e))
+
+    # API 不通時，保底回空，避免整個系統炸掉
+    return []
 
 def bingo_zone_summary(draws):
     zones = {"1-20": 0, "21-40": 0, "41-60": 0, "61-80": 0}
