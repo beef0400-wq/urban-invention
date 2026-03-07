@@ -132,7 +132,6 @@ def init_db():
         );
     """)
 
-    # push_state 舊版可能只有 last_bucket，這裡一起兼容
     cur.execute("""
         CREATE TABLE IF NOT EXISTS push_state (
             push_key TEXT PRIMARY KEY,
@@ -147,19 +146,19 @@ def init_db():
     """)
 
     cur.execute("""
-        DO $$
-        BEGIN
-            IF EXISTS (
-                SELECT 1
-                FROM information_schema.columns
-                WHERE table_name='push_state' AND column_name='last_bucket'
-            ) THEN
-                UPDATE push_state
-                SET last_value = last_bucket
-                WHERE last_value IS NULL;
-            END IF;
-        END
-        $$;
+        ALTER TABLE push_state
+        ADD COLUMN IF NOT EXISTS last_bucket TEXT;
+    """)
+
+    cur.execute("""
+        UPDATE push_state
+        SET last_value = COALESCE(last_value, last_bucket)
+        WHERE last_value IS NULL;
+    """)
+
+    cur.execute("""
+        ALTER TABLE push_state
+        ALTER COLUMN last_bucket DROP NOT NULL;
     """)
 
     conn.commit()
@@ -180,14 +179,18 @@ def reply_message(reply_token: str, text: str):
         "Content-Type": "application/json",
         "Authorization": f"Bearer {CHANNEL_ACCESS_TOKEN}",
     }
-    payload = {"replyToken": reply_token, "messages": [{"type": "text", "text": text}]}
+    payload = {
+        "replyToken": reply_token,
+        "messages": [{"type": "text", "text": text}]
+    }
 
     try:
         r = requests.post(url, headers=headers, data=json.dumps(payload), timeout=10)
+        print("LINE REPLY STATUS:", r.status_code)
         if r.status_code >= 400:
-            print("LINE reply failed:", r.status_code, r.text[:300])
+            print("LINE REPLY BODY:", r.text[:500])
     except Exception as e:
-        print("LINE reply exception:", repr(e))
+        print("LINE REPLY EXCEPTION:", repr(e))
 
 
 def push_message(user_id: str, text: str) -> bool:
@@ -204,12 +207,13 @@ def push_message(user_id: str, text: str) -> bool:
 
     try:
         r = requests.post(url, headers=headers, data=json.dumps(payload), timeout=10)
+        print("LINE PUSH STATUS:", r.status_code, "TO:", user_id)
         if r.status_code >= 400:
-            print("LINE push failed:", user_id, r.status_code, r.text[:300])
+            print("LINE PUSH BODY:", r.text[:500])
             return False
         return True
     except Exception as e:
-        print("LINE push exception:", repr(e))
+        print("LINE PUSH EXCEPTION:", repr(e))
         return False
 
 
@@ -247,12 +251,16 @@ def get_expiry(user_id: str):
 
 
 def is_member(user_id: str) -> bool:
-    exp = get_expiry(user_id)
-    if not exp:
+    try:
+        exp = get_expiry(user_id)
+        if not exp:
+            return False
+        now_tw = datetime.now(TZ_TW)
+        exp_tw = exp.astimezone(TZ_TW)
+        return exp_tw > now_tw
+    except Exception as e:
+        print("IS_MEMBER ERROR:", repr(e))
         return False
-    now_tw = datetime.now(TZ_TW)
-    exp_tw = exp.astimezone(TZ_TW)
-    return exp_tw > now_tw
 
 
 def get_active_member_ids():
@@ -401,12 +409,13 @@ def set_push_state(push_key: str, last_value: str):
     conn = get_conn()
     cur = conn.cursor()
     cur.execute("""
-        INSERT INTO push_state (push_key, last_value, updated_at)
-        VALUES (%s, %s, %s)
+        INSERT INTO push_state (push_key, last_value, last_bucket, updated_at)
+        VALUES (%s, %s, %s, %s)
         ON CONFLICT (push_key) DO UPDATE
         SET last_value = EXCLUDED.last_value,
+            last_bucket = EXCLUDED.last_bucket,
             updated_at = EXCLUDED.updated_at;
-    """, (push_key, last_value, datetime.now(TZ_TW)))
+    """, (push_key, last_value, last_value, datetime.now(TZ_TW)))
     conn.commit()
     cur.close()
     conn.close()
@@ -508,10 +517,6 @@ def hot_zone_and_hotnums_539(draws_30):
 
 
 def build_daily_top_hot(ranked_candidates, pick_date):
-    """
-    每日更新高頻樣本集中：
-    允許重複幾顆，但盡量不會整組完全相同。
-    """
     top_pool = ranked_candidates[:12] if len(ranked_candidates) >= 12 else ranked_candidates[:]
     if not top_pool:
         return "01 02 03 04 05"
@@ -642,34 +647,41 @@ def get_or_build_today_pick_539():
 
 
 def format_539_push():
-    pack = get_or_build_today_pick_539()
-    today_str = datetime.now(TZ_TW).strftime("%Y.%m.%d")
-    quote = get_daily_quote()
+    try:
+        pack = get_or_build_today_pick_539()
+        today_str = datetime.now(TZ_TW).strftime("%Y.%m.%d")
+        quote = get_daily_quote()
 
-    return (
-        "【理性陪跑研究室】\n"
-        f"{today_str}\n\n"
-        "▍結構分析\n"
-        f"近30期活躍區段：{pack['hot_zone']}\n"
-        f"高頻樣本集中：{pack['top_hot']}\n\n"
-        "▍本日模型建議\n"
-        f"{pack['numbers']}\n\n"
-        "模型來源：\n"
-        "240期頻率 × 30期熱度加權\n\n"
-        "—— 今日陪跑語錄 ——\n"
-        f"{quote}\n\n"
-        "（數據結構參考，非保證）"
-    )
+        return (
+            "【理性陪跑研究室】\n"
+            f"{today_str}\n\n"
+            "▍結構分析\n"
+            f"近30期活躍區段：{pack['hot_zone']}\n"
+            f"高頻樣本集中：{pack['top_hot']}\n\n"
+            "▍本日模型建議\n"
+            f"{pack['numbers']}\n\n"
+            "模型來源：\n"
+            "240期頻率 × 30期熱度加權\n\n"
+            "—— 今日陪跑語錄 ——\n"
+            f"{quote}\n\n"
+            "（數據結構參考，非保證）"
+        )
+    except Exception as e:
+        print("FORMAT_539_PUSH ERROR:", repr(e))
+        return (
+            "【理性陪跑研究室】\n\n"
+            "▍本日模型建議\n"
+            "06 14 18 26 33\n\n"
+            "—— 今日陪跑語錄 ——\n"
+            f"{get_daily_quote()}\n\n"
+            "（系統保底內容）"
+        )
 
 
 # =========================
 # Bingo 備援模式
 # =========================
 def fetch_recent_bingo_results(max_rows: int = 60):
-    """
-    手動備援模式：
-    不依賴外部資料源，直接依照台灣時間生成 Bingo 模擬期數與20顆號碼。
-    """
     now = datetime.now(TZ_TW)
     start_dt = now.replace(hour=7, minute=5, second=0, microsecond=0)
 
@@ -760,7 +772,12 @@ def _weighted_pick_bingo(freq_dict, seed_text: str):
 
 
 def get_bingo_analysis_bundle():
-    draws = fetch_recent_bingo_results(max_rows=30)
+    try:
+        draws = fetch_recent_bingo_results(max_rows=30)
+    except Exception as e:
+        print("GET_BINGO_ANALYSIS_BUNDLE ERROR:", repr(e))
+        draws = []
+
     if not draws:
         return {
             "one": "07 19 34 52 71",
@@ -775,108 +792,140 @@ def get_bingo_analysis_bundle():
             "latest": None
         }
 
-    latest = draws[0]
-    d1 = draws[:1]
-    d5 = draws[:5]
-    d10 = draws[:10]
+    try:
+        latest = draws[0]
+        d1 = draws[:1]
+        d5 = draws[:5]
+        d10 = draws[:10]
 
-    zone1, hot1, freq1 = bingo_zone_summary(d1)
-    zone5, hot5, freq5 = bingo_zone_summary(d5)
-    zone10, hot10, freq10 = bingo_zone_summary(d10)
+        zone1, hot1, freq1 = bingo_zone_summary(d1)
+        zone5, hot5, freq5 = bingo_zone_summary(d5)
+        zone10, hot10, freq10 = bingo_zone_summary(d10)
 
-    seed_base = datetime.now(TZ_TW).strftime("%Y%m%d")
-    one = _weighted_pick_bingo(freq1, f"{seed_base}-b1-{_time_bucket(5)}")
-    five = _weighted_pick_bingo(freq5, f"{seed_base}-b5-{_time_bucket(15)}")
-    ten = _weighted_pick_bingo(freq10, f"{seed_base}-b10-{_time_bucket(25)}")
+        seed_base = datetime.now(TZ_TW).strftime("%Y%m%d")
+        one = _weighted_pick_bingo(freq1, f"{seed_base}-b1-{_time_bucket(5)}")
+        five = _weighted_pick_bingo(freq5, f"{seed_base}-b5-{_time_bucket(15)}")
+        ten = _weighted_pick_bingo(freq10, f"{seed_base}-b10-{_time_bucket(25)}")
 
-    seen = {one}
-    if five in seen:
-        five = _weighted_pick_bingo(freq5, f"{seed_base}-b5-alt-{_time_bucket(15)}")
-    seen.add(five)
-    if ten in seen:
-        ten = _weighted_pick_bingo(freq10, f"{seed_base}-b10-alt-{_time_bucket(25)}")
+        seen = {one}
+        if five in seen:
+            five = _weighted_pick_bingo(freq5, f"{seed_base}-b5-alt-{_time_bucket(15)}")
+        seen.add(five)
+        if ten in seen:
+            ten = _weighted_pick_bingo(freq10, f"{seed_base}-b10-alt-{_time_bucket(25)}")
 
-    return {
-        "one": one,
-        "five": five,
-        "ten": ten,
-        "one_zone": zone1,
-        "five_zone": zone5,
-        "ten_zone": zone10,
-        "one_hot": hot1,
-        "five_hot": hot5,
-        "ten_hot": hot10,
-        "latest": latest
-    }
+        return {
+            "one": one,
+            "five": five,
+            "ten": ten,
+            "one_zone": zone1,
+            "five_zone": zone5,
+            "ten_zone": zone10,
+            "one_hot": hot1,
+            "five_hot": hot5,
+            "ten_hot": hot10,
+            "latest": latest
+        }
+
+    except Exception as e:
+        print("GET_BINGO_ANALYSIS_BUNDLE BUILD ERROR:", repr(e))
+        return {
+            "one": "07 19 34 52 71",
+            "five": "05 22 31 46 68",
+            "ten": "09 18 27 55 79",
+            "one_zone": "中高段",
+            "five_zone": "中段",
+            "ten_zone": "高段",
+            "one_hot": "07・19・34・52",
+            "five_hot": "05・22・31・46",
+            "ten_hot": "09・18・27・55",
+            "latest": None
+        }
 
 
 def format_bingo_1_message():
-    b = get_bingo_analysis_bundle()
-    quote = get_daily_quote()
-    return (
-        "【理性陪跑研究室｜Bingo Bingo】\n"
-        f"{datetime.now(TZ_TW).strftime('%Y.%m.%d %H:%M')}\n\n"
-        "▍1期短線模型\n"
-        f"活躍區段：{b['one_zone']}\n"
-        f"高頻樣本：{b['one_hot']}\n\n"
-        "▍陪跑建議\n"
-        f"{b['one']}\n\n"
-        "—— 今日陪跑語錄 ——\n"
-        f"{quote}\n\n"
-        "（模型結構參考，非保證）"
-    )
+    try:
+        b = get_bingo_analysis_bundle()
+        quote = get_daily_quote()
+        return (
+            "【理性陪跑研究室｜Bingo Bingo】\n"
+            f"{datetime.now(TZ_TW).strftime('%Y.%m.%d %H:%M')}\n\n"
+            "▍1期短線模型\n"
+            f"活躍區段：{b['one_zone']}\n"
+            f"高頻樣本：{b['one_hot']}\n\n"
+            "▍陪跑建議\n"
+            f"{b['one']}\n\n"
+            "—— 今日陪跑語錄 ——\n"
+            f"{quote}\n\n"
+            "（模型結構參考，非保證）"
+        )
+    except Exception as e:
+        print("FORMAT_BINGO_1 ERROR:", repr(e))
+        return "【理性陪跑研究室｜Bingo Bingo】\n\n▍1期短線模型\n07 19 34 52 71"
 
 
 def format_bingo_5_message():
-    b = get_bingo_analysis_bundle()
-    quote = get_daily_quote()
-    return (
-        "【理性陪跑研究室｜Bingo Bingo】\n"
-        f"{datetime.now(TZ_TW).strftime('%Y.%m.%d %H:%M')}\n\n"
-        "▍5期節奏模型\n"
-        f"活躍區段：{b['five_zone']}\n"
-        f"高頻樣本：{b['five_hot']}\n\n"
-        "▍陪跑建議\n"
-        f"{b['five']}\n\n"
-        "—— 今日陪跑語錄 ——\n"
-        f"{quote}\n\n"
-        "（模型結構參考，非保證）"
-    )
+    try:
+        b = get_bingo_analysis_bundle()
+        quote = get_daily_quote()
+        return (
+            "【理性陪跑研究室｜Bingo Bingo】\n"
+            f"{datetime.now(TZ_TW).strftime('%Y.%m.%d %H:%M')}\n\n"
+            "▍5期節奏模型\n"
+            f"活躍區段：{b['five_zone']}\n"
+            f"高頻樣本：{b['five_hot']}\n\n"
+            "▍陪跑建議\n"
+            f"{b['five']}\n\n"
+            "—— 今日陪跑語錄 ——\n"
+            f"{quote}\n\n"
+            "（模型結構參考，非保證）"
+        )
+    except Exception as e:
+        print("FORMAT_BINGO_5 ERROR:", repr(e))
+        return "【理性陪跑研究室｜Bingo Bingo】\n\n▍5期節奏模型\n05 22 31 46 68"
 
 
 def format_bingo_10_message():
-    b = get_bingo_analysis_bundle()
-    quote = get_daily_quote()
-    return (
-        "【理性陪跑研究室｜Bingo Bingo】\n"
-        f"{datetime.now(TZ_TW).strftime('%Y.%m.%d %H:%M')}\n\n"
-        "▍10期結構模型\n"
-        f"活躍區段：{b['ten_zone']}\n"
-        f"高頻樣本：{b['ten_hot']}\n\n"
-        "▍陪跑建議\n"
-        f"{b['ten']}\n\n"
-        "—— 今日陪跑語錄 ——\n"
-        f"{quote}\n\n"
-        "（模型結構參考，非保證）"
-    )
+    try:
+        b = get_bingo_analysis_bundle()
+        quote = get_daily_quote()
+        return (
+            "【理性陪跑研究室｜Bingo Bingo】\n"
+            f"{datetime.now(TZ_TW).strftime('%Y.%m.%d %H:%M')}\n\n"
+            "▍10期結構模型\n"
+            f"活躍區段：{b['ten_zone']}\n"
+            f"高頻樣本：{b['ten_hot']}\n\n"
+            "▍陪跑建議\n"
+            f"{b['ten']}\n\n"
+            "—— 今日陪跑語錄 ——\n"
+            f"{quote}\n\n"
+            "（模型結構參考，非保證）"
+        )
+    except Exception as e:
+        print("FORMAT_BINGO_10 ERROR:", repr(e))
+        return "【理性陪跑研究室｜Bingo Bingo】\n\n▍10期結構模型\n09 18 27 55 79"
 
 
 def format_bingo_evening_push():
-    b = get_bingo_analysis_bundle()
-    quote = get_daily_quote()
-    return (
-        "【理性陪跑研究室｜Bingo Bingo】\n"
-        f"{datetime.now(TZ_TW).strftime('%Y.%m.%d')} 晚間模型\n\n"
-        "▍1期短線模型\n"
-        f"{b['one']}\n\n"
-        "▍5期節奏模型\n"
-        f"{b['five']}\n\n"
-        "▍10期結構模型\n"
-        f"{b['ten']}\n\n"
-        "—— 今日陪跑語錄 ——\n"
-        f"{quote}\n\n"
-        "（模型結構參考，非保證）"
-    )
+    try:
+        b = get_bingo_analysis_bundle()
+        quote = get_daily_quote()
+        return (
+            "【理性陪跑研究室｜Bingo Bingo】\n"
+            f"{datetime.now(TZ_TW).strftime('%Y.%m.%d')} 晚間模型\n\n"
+            "▍1期短線模型\n"
+            f"{b['one']}\n\n"
+            "▍5期節奏模型\n"
+            f"{b['five']}\n\n"
+            "▍10期結構模型\n"
+            f"{b['ten']}\n\n"
+            "—— 今日陪跑語錄 ——\n"
+            f"{quote}\n\n"
+            "（模型結構參考，非保證）"
+        )
+    except Exception as e:
+        print("FORMAT_BINGO_EVENING ERROR:", repr(e))
+        return "【理性陪跑研究室｜Bingo Bingo】\n\n07 19 34 52 71\n05 22 31 46 68\n09 18 27 55 79"
 
 
 def format_bingo_latest_push():
@@ -912,6 +961,14 @@ def format_expiry_reminder(exp_dt):
 
 
 # =========================
+# Health
+# =========================
+@app.route("/health")
+def health():
+    return "OK", 200
+
+
+# =========================
 # Cron Routes
 # =========================
 @app.route("/")
@@ -930,7 +987,6 @@ def cron_daily_push():
         now = datetime.now(TZ_TW)
         today_key = now.strftime("%Y-%m-%d")
 
-        # 到期前 3 天提醒
         reminder_key = f"expiry_reminder_{today_key}"
         if get_push_state(reminder_key) is None:
             expiring_rows = get_expiring_members(days_before=3)
@@ -941,7 +997,6 @@ def cron_daily_push():
         if not members:
             return "No active members", 200
 
-        # 539：週日不推
         if now.weekday() != 6:
             key_539 = f"daily_539_{today_key}"
             if get_push_state(key_539) is None:
@@ -950,7 +1005,6 @@ def cron_daily_push():
                     push_message(uid, msg539)
                 set_push_state(key_539, "done")
 
-        # Bingo：每天都推
         key_bingo = f"daily_bingo_{today_key}"
         if get_push_state(key_bingo) is None:
             msg_bingo = format_bingo_evening_push()
@@ -1009,185 +1063,205 @@ def cron_check_bingo():
 # =========================
 @app.route("/webhook", methods=["POST"])
 def webhook():
-    raw = request.get_data()
-    signature = request.headers.get("X-Line-Signature", "")
-
-    if not verify_line_signature(raw, signature):
-        abort(403)
-
-    body = request.get_json(silent=True) or {}
-    events = body.get("events", [])
-
     try:
-        init_db()
-    except Exception as e:
-        print("INIT_DB ERROR:", repr(e))
+        raw = request.get_data()
+        signature = request.headers.get("X-Line-Signature", "")
+
+        if not verify_line_signature(raw, signature):
+            print("SIGNATURE ERROR")
+            abort(403)
+
+        body = request.get_json(silent=True) or {}
+        events = body.get("events", [])
+
+        try:
+            init_db()
+        except Exception as e:
+            print("INIT_DB ERROR:", repr(e))
+            return "OK"
+
+        for event in events:
+            try:
+                if event.get("type") != "message":
+                    continue
+
+                message = event.get("message", {})
+                if message.get("type") != "text":
+                    continue
+
+                text = (message.get("text") or "").replace("\u3000", " ").strip()
+                reply_token = event.get("replyToken")
+                user_id = event.get("source", {}).get("userId", "")
+
+                print("WEBHOOK TEXT:", text)
+                print("WEBHOOK USER:", user_id)
+
+                if text == "申請加入會員":
+                    reply_message(
+                        reply_token,
+                        "請輸入:\n"
+                        "(遊戲帳號 XXXXXX)\n"
+                        "X為3A帳號 ()內都要輸入\n\n"
+                        "範例: 遊戲帳號 123456"
+                    )
+                    continue
+
+                if text == "賓果分析":
+                    reply_message(
+                        reply_token,
+                        "請輸入:賓果1期分析/賓果5期分析/賓果10期分析"
+                    )
+                    continue
+
+                if text in ("指令", "help", "HELP"):
+                    reply_message(
+                        reply_token,
+                        "📌 指令\n\n"
+                        "會員：\n"
+                        "1) 申請加入會員\n"
+                        "2) 遊戲帳號 XXXXX\n"
+                        "3) 今日陪跑\n"
+                        "4) 賓果分析\n"
+                        "5) 賓果1期分析\n"
+                        "6) 賓果5期分析\n"
+                        "7) 賓果10期分析\n"
+                        "8) 預測分析\n"
+                        "9) 取消預測分析\n"
+                        "10) 我的到期日\n\n"
+                        "管理員：\n"
+                        "1) 待確認 密碼\n"
+                        "2) 確認 XXXXX 密碼"
+                    )
+                    continue
+
+                if text.startswith("遊戲帳號 "):
+                    parts = text.split(maxsplit=1)
+                    if len(parts) != 2 or not parts[1].strip():
+                        reply_message(reply_token, "格式：遊戲帳號 XXXXX")
+                    else:
+                        game_account = parts[1].strip()
+                        save_pending_account(game_account, user_id)
+                        reply_message(
+                            reply_token,
+                            "✅ 已收到你的申請加入會員\n\n"
+                            f"帳號：{game_account}\n\n"
+                            "請等待管理員確認開通。\n"
+                            "（開通後可輸入：今日陪跑 / 賓果分析 / 預測分析 / 我的到期日）"
+                        )
+                    continue
+
+                if text.startswith("待確認 "):
+                    parts = text.split()
+                    if len(parts) != 2 or parts[1] != ADMIN_SECRET:
+                        reply_message(reply_token, "管理密碼錯誤。")
+                        continue
+
+                    rows = get_latest_pending(50)
+                    if not rows:
+                        reply_message(reply_token, "目前沒有待確認帳號。")
+                        continue
+
+                    msg = "📋 最近待確認帳號（最多50筆）\n\n"
+                    for ga, uid, ts in rows:
+                        ts_str = ts.astimezone(TZ_TW).strftime("%Y-%m-%d %H:%M")
+                        msg += f"帳號：{ga}\nuserId：{uid}\n時間：{ts_str}\n-----------------\n"
+                    reply_message(reply_token, msg[:5000])
+                    continue
+
+                if text.startswith("確認 "):
+                    parts = text.split()
+                    if len(parts) != 3:
+                        reply_message(reply_token, "格式：確認 <遊戲帳號> <管理密碼>\n例：確認 123456 aaa888")
+                        continue
+
+                    _, game_account, secret = parts
+                    if secret != ADMIN_SECRET:
+                        reply_message(reply_token, "管理密碼錯誤。")
+                        continue
+
+                    target_user_id = pop_pending_user_id(game_account)
+                    if not target_user_id:
+                        reply_message(reply_token, f"找不到待確認帳號：{game_account}")
+                        continue
+
+                    dt_tw = set_expiry_plus_days(target_user_id, 30)
+                    reply_message(
+                        reply_token,
+                        "✅ 已開通\n\n"
+                        f"帳號：{game_account}\n"
+                        f"到期（台灣時間）：{dt_tw.strftime('%Y-%m-%d %H:%M')}"
+                    )
+                    continue
+
+                if text == "我的到期日":
+                    exp = get_expiry(user_id)
+                    if not exp:
+                        reply_message(reply_token, "你目前尚未開通。\n請先輸入：遊戲帳號 XXXXX")
+                    else:
+                        exp_tw = exp.astimezone(TZ_TW)
+                        reply_message(reply_token, "⏳ 你的到期時間（台灣時間）：\n" + exp_tw.strftime("%Y-%m-%d %H:%M"))
+                    continue
+
+                if text == "預測分析":
+                    if not is_member(user_id):
+                        reply_message(reply_token, "🌿 預測分析屬於會員內容\n\n請先輸入：遊戲帳號 XXXXX")
+                    else:
+                        enable_prediction(user_id)
+                        reply_message(
+                            reply_token,
+                            "✅ 已開啟預測分析\n\n"
+                            "之後若有 Bingo 即時分析更新，\n"
+                            "你會收到：\n"
+                            "1) 下一期短線模型"
+                        )
+                    continue
+
+                if text == "取消預測分析":
+                    disable_prediction(user_id)
+                    reply_message(reply_token, "✅ 已取消預測分析推播")
+                    continue
+
+                if text == "今日陪跑":
+                    if not is_member(user_id):
+                        reply_message(reply_token, "🌿 今日陪跑屬於會員內容\n\n請先輸入：遊戲帳號 XXXXX")
+                    else:
+                        reply_message(reply_token, format_539_push())
+                    continue
+
+                if text == "賓果1期分析":
+                    if not is_member(user_id):
+                        reply_message(reply_token, "🌿 賓果1期分析屬於會員內容\n\n請先輸入：遊戲帳號 XXXXX")
+                    else:
+                        reply_message(reply_token, format_bingo_1_message())
+                    continue
+
+                if text == "賓果5期分析":
+                    if not is_member(user_id):
+                        reply_message(reply_token, "🌿 賓果5期分析屬於會員內容\n\n請先輸入：遊戲帳號 XXXXX")
+                    else:
+                        reply_message(reply_token, format_bingo_5_message())
+                    continue
+
+                if text == "賓果10期分析":
+                    if not is_member(user_id):
+                        reply_message(reply_token, "🌿 賓果10期分析屬於會員內容\n\n請先輸入：遊戲帳號 XXXXX")
+                    else:
+                        reply_message(reply_token, format_bingo_10_message())
+                    continue
+
+                reply_message(reply_token, "輸入「指令」查看功能。")
+
+            except Exception as e:
+                print("EVENT HANDLE ERROR:", repr(e))
+                try:
+                    if event.get("replyToken"):
+                        reply_message(event.get("replyToken"), "系統忙碌中，請稍後再試一次。")
+                except Exception as e2:
+                    print("REPLY FAIL AFTER EVENT ERROR:", repr(e2))
+                continue
+
         return "OK"
 
-    for event in events:
-        if event.get("type") != "message":
-            continue
-        message = event.get("message", {})
-        if message.get("type") != "text":
-            continue
-
-        text = (message.get("text") or "").strip()
-        reply_token = event.get("replyToken")
-        user_id = event.get("source", {}).get("userId", "")
-
-        if text == "申請加入會員":
-            reply_message(
-                reply_token,
-                "請輸入:\n"
-                "(遊戲帳號 XXXXXX)\n"
-                "X為3A帳號 ()內都要輸入\n\n"
-                "範例: 遊戲帳號 123456"
-            )
-            continue
-
-        if text == "賓果分析":
-            reply_message(
-                reply_token,
-                "請輸入:賓果1期分析/賓果5期分析/賓果10期分析"
-            )
-            continue
-
-        if text in ("指令", "help", "HELP"):
-            reply_message(
-                reply_token,
-                "📌 指令\n\n"
-                "會員：\n"
-                "1) 申請加入會員\n"
-                "2) 遊戲帳號 XXXXX\n"
-                "3) 今日陪跑\n"
-                "4) 賓果分析\n"
-                "5) 賓果1期分析\n"
-                "6) 賓果5期分析\n"
-                "7) 賓果10期分析\n"
-                "8) 預測分析\n"
-                "9) 取消預測分析\n"
-                "10) 我的到期日\n\n"
-                "管理員：\n"
-                "1) 待確認 密碼\n"
-                "2) 確認 XXXXX 密碼"
-            )
-            continue
-
-        if text.startswith("遊戲帳號 "):
-            parts = text.split(maxsplit=1)
-            if len(parts) != 2 or not parts[1].strip():
-                reply_message(reply_token, "格式：遊戲帳號 XXXXX")
-            else:
-                game_account = parts[1].strip()
-                save_pending_account(game_account, user_id)
-                reply_message(
-                    reply_token,
-                    "✅ 已收到你的申請加入會員\n\n"
-                    f"帳號：{game_account}\n\n"
-                    "請等待管理員確認開通。\n"
-                    "（開通後可輸入：今日陪跑 / 賓果分析 / 預測分析 / 我的到期日）"
-                )
-            continue
-
-        if text.startswith("待確認 "):
-            parts = text.split()
-            if len(parts) != 2 or parts[1] != ADMIN_SECRET:
-                reply_message(reply_token, "管理密碼錯誤。")
-                continue
-
-            rows = get_latest_pending(50)
-            if not rows:
-                reply_message(reply_token, "目前沒有待確認帳號。")
-                continue
-
-            msg = "📋 最近待確認帳號（最多50筆）\n\n"
-            for ga, uid, ts in rows:
-                ts_str = ts.astimezone(TZ_TW).strftime("%Y-%m-%d %H:%M")
-                msg += f"帳號：{ga}\nuserId：{uid}\n時間：{ts_str}\n-----------------\n"
-            reply_message(reply_token, msg[:5000])
-            continue
-
-        if text.startswith("確認 "):
-            parts = text.split()
-            if len(parts) != 3:
-                reply_message(reply_token, "格式：確認 <遊戲帳號> <管理密碼>\n例：確認 123456 aaa888")
-                continue
-
-            _, game_account, secret = parts
-            if secret != ADMIN_SECRET:
-                reply_message(reply_token, "管理密碼錯誤。")
-                continue
-
-            target_user_id = pop_pending_user_id(game_account)
-            if not target_user_id:
-                reply_message(reply_token, f"找不到待確認帳號：{game_account}")
-                continue
-
-            dt_tw = set_expiry_plus_days(target_user_id, 30)
-            reply_message(
-                reply_token,
-                "✅ 已開通\n\n"
-                f"帳號：{game_account}\n"
-                f"到期（台灣時間）：{dt_tw.strftime('%Y-%m-%d %H:%M')}"
-            )
-            continue
-
-        if text == "我的到期日":
-            exp = get_expiry(user_id)
-            if not exp:
-                reply_message(reply_token, "你目前尚未開通。\n請先輸入：遊戲帳號 XXXXX")
-            else:
-                exp_tw = exp.astimezone(TZ_TW)
-                reply_message(reply_token, "⏳ 你的到期時間（台灣時間）：\n" + exp_tw.strftime("%Y-%m-%d %H:%M"))
-            continue
-
-        if text == "預測分析":
-            if not is_member(user_id):
-                reply_message(reply_token, "🌿 預測分析屬於會員內容\n\n請先輸入：遊戲帳號 XXXXX")
-            else:
-                enable_prediction(user_id)
-                reply_message(
-                    reply_token,
-                    "✅ 已開啟預測分析\n\n"
-                    "之後若有 Bingo 即時分析更新，\n"
-                    "你會收到：\n"
-                    "1) 下一期短線模型"
-                )
-            continue
-
-        if text == "取消預測分析":
-            disable_prediction(user_id)
-            reply_message(reply_token, "✅ 已取消預測分析推播")
-            continue
-
-        if text == "今日陪跑":
-            if not is_member(user_id):
-                reply_message(reply_token, "🌿 今日陪跑屬於會員內容\n\n請先輸入：遊戲帳號 XXXXX")
-            else:
-                reply_message(reply_token, format_539_push())
-            continue
-
-        if text == "賓果1期分析":
-            if not is_member(user_id):
-                reply_message(reply_token, "🌿 賓果1期分析屬於會員內容\n\n請先輸入：遊戲帳號 XXXXX")
-            else:
-                reply_message(reply_token, format_bingo_1_message())
-            continue
-
-        if text == "賓果5期分析":
-            if not is_member(user_id):
-                reply_message(reply_token, "🌿 賓果5期分析屬於會員內容\n\n請先輸入：遊戲帳號 XXXXX")
-            else:
-                reply_message(reply_token, format_bingo_5_message())
-            continue
-
-        if text == "賓果10期分析":
-            if not is_member(user_id):
-                reply_message(reply_token, "🌿 賓果10期分析屬於會員內容\n\n請先輸入：遊戲帳號 XXXXX")
-            else:
-                reply_message(reply_token, format_bingo_10_message())
-            continue
-
-        reply_message(reply_token, "輸入「指令」查看功能。")
-
-    return "OK"
+    except Exception as e:
+        print("WEBHOOK FATAL ERROR:", repr(e))
+        return "OK"
