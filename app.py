@@ -132,6 +132,7 @@ def init_db():
         );
     """)
 
+    # push_state：新舊欄位相容
     cur.execute("""
         CREATE TABLE IF NOT EXISTS push_state (
             push_key TEXT PRIMARY KEY,
@@ -156,10 +157,15 @@ def init_db():
         WHERE last_value IS NULL;
     """)
 
-    cur.execute("""
-        ALTER TABLE push_state
-        ALTER COLUMN last_bucket DROP NOT NULL;
-    """)
+    try:
+        cur.execute("""
+            ALTER TABLE push_state
+            ALTER COLUMN last_bucket DROP NOT NULL;
+        """)
+    except Exception as e:
+        print("ALTER last_bucket DROP NOT NULL skipped:", repr(e))
+        conn.rollback()
+        cur = conn.cursor()
 
     conn.commit()
     cur.close()
@@ -973,7 +979,8 @@ def health():
 # =========================
 @app.route("/")
 def home():
-    return "Bot is running."
+    return "Bot is running.", 200
+
 
 @app.route("/cron/daily-push")
 def cron_daily_push():
@@ -1073,6 +1080,8 @@ def webhook():
 
         body = request.get_json(silent=True) or {}
         events = body.get("events", [])
+
+        print("WEBHOOK HIT AT:", datetime.now(TZ_TW).strftime("%Y-%m-%d %H:%M:%S"))
 
         try:
             init_db()
@@ -1265,3 +1274,11 @@ def webhook():
     except Exception as e:
         print("WEBHOOK FATAL ERROR:", repr(e))
         return "OK"
+
+
+# =========================
+# Run
+# =========================
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host="0.0.0.0", port=port)
