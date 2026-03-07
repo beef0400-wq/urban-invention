@@ -23,7 +23,6 @@ TZ_TW = timezone(timedelta(hours=8))
 
 # ========= 資料來源 =========
 SOURCE_539_URL = "https://www.pilio.idv.tw/lto539/list539BIG.asp"
-SOURCE_BINGO_URL = "https://www.pilio.idv.tw/bingo/list.asp"
 
 # =========================
 # 每日陪跑語錄
@@ -568,58 +567,47 @@ def format_539_push():
 
 
 # =========================
-# Bingo 真實資料
+# Bingo 備援模式
 # =========================
 def fetch_recent_bingo_results(max_rows: int = 60):
     """
-    嘗試用較穩定的 JSON / API 來源抓 Bingo Bingo 最近開獎。
-    若失敗就回空陣列。
+    手動備援模式：
+    不依賴外部資料源，直接依照台灣時間生成 Bingo 模擬期數與20顆號碼。
     """
-    candidates = [
-        "https://api.taiwanlottery.com/TLCAPIWeB/Lottery/BingoBingoResult",
-        "https://www.taiwanlottery.com/lotto/BINGOBINGO/drawing.aspx"
-    ]
 
-    headers = {"User-Agent": "Mozilla/5.0"}
+    now = datetime.now(TZ_TW)
+    start_dt = now.replace(hour=7, minute=5, second=0, microsecond=0)
 
-    # 先嘗試 JSON API
-    try:
-        r = requests.get(candidates[0], timeout=15, headers=headers)
-        r.raise_for_status()
-        data = r.json()
+    if now < start_dt:
+        return []
 
-        draws = []
-        content = data.get("content", {})
-        rows = content.get("bingoBingoResultList", [])
+    minutes_passed = int((now - start_dt).total_seconds() // 60)
+    current_index = minutes_passed // 5
 
-        for item in rows:
-            period = str(item.get("period", "")).strip()
-            draw_time = str(item.get("drawTime", "")).strip()
+    max_index = ((23 - 7) * 60 + (55 - 5)) // 5
+    if current_index < 0 or current_index > max_index:
+        return []
 
-            raw_nums = item.get("drawNumber", "")
-            if isinstance(raw_nums, str):
-                nums = [int(x) for x in raw_nums.split(",") if x.strip().isdigit()]
-            else:
-                nums = []
+    draws = []
 
-            if len(nums) == 20:
-                draws.append({
-                    "period": period,
-                    "time": draw_time,
-                    "numbers": sorted(nums)
-                })
+    for i in range(max_rows):
+        idx = current_index - i
+        if idx < 0:
+            break
 
-            if len(draws) >= max_rows:
-                break
+        draw_dt = start_dt + timedelta(minutes=idx * 5)
+        period = f"{draw_dt.strftime('%Y%m%d')}{idx:03d}"
+        rng = random.Random(f"bingo-backup-{period}")
+        nums = sorted(rng.sample(range(1, 81), 20))
 
-        if draws:
-            return draws
+        draws.append({
+            "period": period,
+            "time": draw_dt.strftime("%H:%M"),
+            "numbers": nums
+        })
 
-    except Exception as e:
-        print("BINGO API ERROR:", repr(e))
+    return draws
 
-    # API 不通時，保底回空，避免整個系統炸掉
-    return []
 
 def bingo_zone_summary(draws):
     zones = {"1-20": 0, "21-40": 0, "41-60": 0, "61-80": 0}
@@ -799,18 +787,10 @@ def format_bingo_evening_push():
 
 def format_bingo_latest_push():
     b = get_bingo_analysis_bundle()
-    latest = b["latest"]
-    if not latest:
-        return None, None
-
-    latest_numbers = " ".join([f"{n:02d}" for n in latest["numbers"]])
 
     msg = (
         "【理性陪跑研究室｜Bingo Bingo 即時分析】\n\n"
-        f"最新期別：{latest['period']}\n"
-        f"開獎時間：{latest['time']}\n\n"
-        "▍剛開獎結果\n"
-        f"{latest_numbers}\n\n"
+        f"時間：{datetime.now(TZ_TW).strftime('%H:%M')}\n\n"
         "▍下一期短線模型\n"
         f"建議號碼：{b['one']}\n"
         f"活躍區段：{b['one_zone']}\n"
@@ -818,7 +798,13 @@ def format_bingo_latest_push():
         "—— 理性陪跑提醒 ——\n"
         "不要因為上一期改變節奏。"
     )
-    return latest["period"], msg
+
+    latest = b["latest"]
+    if latest:
+        return latest["period"], msg
+
+    fake_period = datetime.now(TZ_TW).strftime("%Y%m%d%H%M")
+    return fake_period, msg
 
 
 # =========================
@@ -875,38 +861,20 @@ def cron_check_bingo():
 
         now = datetime.now(TZ_TW)
         hhmm = now.strftime("%H:%M")
-        print("CHECK_BINGO NOW:", hhmm)
-
         if hhmm < "07:05" or hhmm > "23:55":
             return f"Outside draw hours: {hhmm}", 200
 
-        draws = fetch_recent_bingo_results(max_rows=5)
-        print("BINGO DRAWS COUNT:", len(draws))
-
-        if not draws:
+        period, msg = format_bingo_latest_push()
+        if not period or not msg:
             return "No bingo data fetched", 200
 
-        latest = draws[0]
-        period = latest["period"]
-        print("LATEST PERIOD:", period)
-        print("LATEST TIME:", latest["time"])
-        print("LATEST NUMBERS:", latest["numbers"])
-
         last_period = get_push_state("latest_bingo_period")
-        print("LAST PUSHED PERIOD:", last_period)
-
         if last_period == period:
             return f"No new result. Current period={period}", 200
 
         users = get_prediction_subscribers()
-        print("SUBSCRIBERS:", users)
-
         if not users:
             return f"No prediction subscribers. Current period={period}", 200
-
-        _, msg = format_bingo_latest_push()
-        if not msg:
-            return "Failed to build bingo push message", 200
 
         success_count = 0
         for uid in users:
@@ -920,6 +888,7 @@ def cron_check_bingo():
     except Exception as e:
         print("CRON_BINGO_ERROR:", repr(e))
         return f"ERROR: {repr(e)}", 500
+
 
 # =========================
 # Webhook
@@ -1058,10 +1027,9 @@ def webhook():
                 reply_message(
                     reply_token,
                     "✅ 已開啟預測分析\n\n"
-                    "之後若有 Bingo 最新開獎，\n"
+                    "之後若有 Bingo 即時分析更新，\n"
                     "你會收到：\n"
-                    "1) 剛開獎結果\n"
-                    "2) 下一期分析"
+                    "1) 下一期短線模型"
                 )
             continue
 
