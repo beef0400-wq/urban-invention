@@ -132,12 +132,34 @@ def init_db():
         );
     """)
 
+    # push_state 舊版可能只有 last_bucket，這裡一起兼容
     cur.execute("""
         CREATE TABLE IF NOT EXISTS push_state (
             push_key TEXT PRIMARY KEY,
-            last_value TEXT NOT NULL,
+            last_value TEXT,
             updated_at TIMESTAMPTZ NOT NULL
         );
+    """)
+
+    cur.execute("""
+        ALTER TABLE push_state
+        ADD COLUMN IF NOT EXISTS last_value TEXT;
+    """)
+
+    cur.execute("""
+        DO $$
+        BEGIN
+            IF EXISTS (
+                SELECT 1
+                FROM information_schema.columns
+                WHERE table_name='push_state' AND column_name='last_bucket'
+            ) THEN
+                UPDATE push_state
+                SET last_value = last_bucket
+                WHERE last_value IS NULL;
+            END IF;
+        END
+        $$;
     """)
 
     conn.commit()
@@ -242,6 +264,24 @@ def get_active_member_ids():
     cur.close()
     conn.close()
     return [r[0] for r in rows]
+
+
+def get_expiring_members(days_before=3):
+    conn = get_conn()
+    cur = conn.cursor()
+
+    today = datetime.now(TZ_TW).date()
+    target_date = today + timedelta(days=days_before)
+
+    cur.execute("""
+        SELECT user_id, expires_at
+        FROM members
+        WHERE (expires_at AT TIME ZONE 'Asia/Taipei')::date = %s;
+    """, (target_date,))
+    rows = cur.fetchall()
+    cur.close()
+    conn.close()
+    return rows
 
 
 # =========================
@@ -376,7 +416,11 @@ def set_push_state(push_key: str, last_value: str):
 # 539 真實資料
 # =========================
 def fetch_recent_539_results(max_rows: int = 80):
-    r = requests.get(SOURCE_539_URL, timeout=10)
+    r = requests.get(
+        SOURCE_539_URL,
+        timeout=15,
+        headers={"User-Agent": "Mozilla/5.0"}
+    )
     r.encoding = "utf-8"
     html = r.text
 
@@ -447,6 +491,7 @@ def load_539_draws(limit=240):
 def hot_zone_and_hotnums_539(draws_30):
     zone = {"1-13": 0, "14-26": 0, "27-39": 0}
     freq30 = {i: 0 for i in range(1, 40)}
+
     for _, nums in draws_30:
         for n in nums:
             freq30[n] += 1
@@ -458,9 +503,53 @@ def hot_zone_and_hotnums_539(draws_30):
                 zone["27-39"] += 1
 
     hot_zone = max(zone.items(), key=lambda x: x[1])[0]
-    top_hot = sorted(freq30.items(), key=lambda x: x[1], reverse=True)[:5]
-    top_hot_str = " ".join([f"{n:02d}" for n, _ in top_hot])
-    return hot_zone, top_hot_str, freq30
+    ranked = sorted(freq30.items(), key=lambda x: (x[1], -x[0]), reverse=True)
+    return hot_zone, ranked, freq30
+
+
+def build_daily_top_hot(ranked_candidates, pick_date):
+    """
+    每日更新高頻樣本集中：
+    允許重複幾顆，但盡量不會整組完全相同。
+    """
+    top_pool = ranked_candidates[:12] if len(ranked_candidates) >= 12 else ranked_candidates[:]
+    if not top_pool:
+        return "01 02 03 04 05"
+
+    rng = random.Random(f"539-top-hot-{pick_date.isoformat()}")
+
+    weighted_pool = []
+    for n, score in top_pool:
+        copies = max(1, score)
+        weighted_pool.extend([n] * copies)
+
+    chosen = set()
+    safe_guard = 0
+    while len(chosen) < min(5, len(top_pool)) and safe_guard < 200:
+        safe_guard += 1
+        chosen.add(rng.choice(weighted_pool))
+
+    if len(chosen) < 5:
+        for n, _ in top_pool:
+            chosen.add(n)
+            if len(chosen) >= 5:
+                break
+
+    return " ".join([f"{n:02d}" for n in sorted(list(chosen)[:5])])
+
+
+def get_prev_day_top_hot(prev_date):
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT top_hot
+        FROM daily_pick_cache
+        WHERE pick_date = %s;
+    """, (prev_date,))
+    row = cur.fetchone()
+    cur.close()
+    conn.close()
+    return row[0] if row else None
 
 
 def freq_539(draws_240):
@@ -521,7 +610,14 @@ def get_or_build_today_pick_539():
     ensure_latest_539_in_db()
     draws_240 = load_539_draws(limit=240)
     d30 = draws_240[:30] if len(draws_240) >= 30 else draws_240
-    hot_zone, top_hot, f30 = hot_zone_and_hotnums_539(d30)
+
+    hot_zone, ranked_candidates, f30 = hot_zone_and_hotnums_539(d30)
+    prev_top_hot = get_prev_day_top_hot(today - timedelta(days=1))
+    top_hot = build_daily_top_hot(ranked_candidates, today)
+
+    if prev_top_hot and prev_top_hot == top_hot:
+        top_hot = build_daily_top_hot(ranked_candidates[::-1], today)
+
     f240 = freq_539(draws_240) if draws_240 else {i: 1 for i in range(1, 40)}
     numbers = weighted_pick_539(f240, f30, k=5)
     note = "模型：近240期頻率 × 近30期熱度加權"
@@ -574,7 +670,6 @@ def fetch_recent_bingo_results(max_rows: int = 60):
     手動備援模式：
     不依賴外部資料源，直接依照台灣時間生成 Bingo 模擬期數與20顆號碼。
     """
-
     now = datetime.now(TZ_TW)
     start_dt = now.replace(hour=7, minute=5, second=0, microsecond=0)
 
@@ -589,7 +684,6 @@ def fetch_recent_bingo_results(max_rows: int = 60):
         return []
 
     draws = []
-
     for i in range(max_rows):
         idx = current_index - i
         if idx < 0:
@@ -807,6 +901,16 @@ def format_bingo_latest_push():
     return fake_period, msg
 
 
+def format_expiry_reminder(exp_dt):
+    exp_tw = exp_dt.astimezone(TZ_TW)
+    return (
+        "【會員到期提醒】\n\n"
+        "你的會員將在 3 天後到期。\n"
+        f"到期時間：{exp_tw.strftime('%Y-%m-%d %H:%M')}\n\n"
+        "若要續費，請聯絡管理員。"
+    )
+
+
 # =========================
 # Cron Routes
 # =========================
@@ -823,12 +927,21 @@ def cron_daily_push():
     try:
         init_db()
         members = get_active_member_ids()
-        if not members:
-            return "No active members", 200
-
         now = datetime.now(TZ_TW)
         today_key = now.strftime("%Y-%m-%d")
 
+        # 到期前 3 天提醒
+        reminder_key = f"expiry_reminder_{today_key}"
+        if get_push_state(reminder_key) is None:
+            expiring_rows = get_expiring_members(days_before=3)
+            for uid, exp_dt in expiring_rows:
+                push_message(uid, format_expiry_reminder(exp_dt))
+            set_push_state(reminder_key, "done")
+
+        if not members:
+            return "No active members", 200
+
+        # 539：週日不推
         if now.weekday() != 6:
             key_539 = f"daily_539_{today_key}"
             if get_push_state(key_539) is None:
@@ -837,6 +950,7 @@ def cron_daily_push():
                     push_message(uid, msg539)
                 set_push_state(key_539, "done")
 
+        # Bingo：每天都推
         key_bingo = f"daily_bingo_{today_key}"
         if get_push_state(key_bingo) is None:
             msg_bingo = format_bingo_evening_push()
@@ -931,6 +1045,13 @@ def webhook():
             )
             continue
 
+        if text == "賓果分析":
+            reply_message(
+                reply_token,
+                "請輸入:賓果1期分析/賓果5期分析/賓果10期分析"
+            )
+            continue
+
         if text in ("指令", "help", "HELP"):
             reply_message(
                 reply_token,
@@ -939,12 +1060,13 @@ def webhook():
                 "1) 申請加入會員\n"
                 "2) 遊戲帳號 XXXXX\n"
                 "3) 今日陪跑\n"
-                "4) 賓果1期分析\n"
-                "5) 賓果5期分析\n"
-                "6) 賓果10期分析\n"
-                "7) 預測分析\n"
-                "8) 取消預測分析\n"
-                "9) 我的到期日\n\n"
+                "4) 賓果分析\n"
+                "5) 賓果1期分析\n"
+                "6) 賓果5期分析\n"
+                "7) 賓果10期分析\n"
+                "8) 預測分析\n"
+                "9) 取消預測分析\n"
+                "10) 我的到期日\n\n"
                 "管理員：\n"
                 "1) 待確認 密碼\n"
                 "2) 確認 XXXXX 密碼"
@@ -963,7 +1085,7 @@ def webhook():
                     "✅ 已收到你的申請加入會員\n\n"
                     f"帳號：{game_account}\n\n"
                     "請等待管理員確認開通。\n"
-                    "（開通後可輸入：今日陪跑 / 賓果1期分析 / 賓果5期分析 / 賓果10期分析 / 預測分析 / 我的到期日）"
+                    "（開通後可輸入：今日陪跑 / 賓果分析 / 預測分析 / 我的到期日）"
                 )
             continue
 
