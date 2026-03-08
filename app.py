@@ -115,6 +115,14 @@ def init_db():
     """)
 
     cur.execute("""
+        CREATE TABLE IF NOT EXISTS daily_push_subscribers (
+            user_id TEXT PRIMARY KEY,
+            enabled BOOLEAN NOT NULL DEFAULT TRUE,
+            updated_at TIMESTAMPTZ NOT NULL
+        );
+    """)
+
+    cur.execute("""
         CREATE TABLE IF NOT EXISTS lotto_539_draws (
             draw_date DATE PRIMARY KEY,
             numbers TEXT NOT NULL
@@ -132,7 +140,6 @@ def init_db():
         );
     """)
 
-    # push_state：新舊欄位相容
     cur.execute("""
         CREATE TABLE IF NOT EXISTS push_state (
             push_key TEXT PRIMARY KEY,
@@ -350,7 +357,7 @@ def get_latest_pending(limit=50):
 
 
 # =========================
-# 預測分析訂閱
+# 訂閱控制
 # =========================
 def enable_prediction(user_id: str):
     conn = get_conn()
@@ -390,6 +397,50 @@ def get_prediction_subscribers():
         FROM prediction_subscribers p
         JOIN members m ON p.user_id = m.user_id
         WHERE p.enabled = TRUE
+          AND m.expires_at > %s;
+    """, (datetime.now(TZ_TW),))
+    rows = cur.fetchall()
+    cur.close()
+    conn.close()
+    return [r[0] for r in rows]
+
+
+def enable_daily_push(user_id: str):
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("""
+        INSERT INTO daily_push_subscribers (user_id, enabled, updated_at)
+        VALUES (%s, TRUE, %s)
+        ON CONFLICT (user_id)
+        DO UPDATE SET enabled = TRUE, updated_at = EXCLUDED.updated_at;
+    """, (user_id, datetime.now(TZ_TW)))
+    conn.commit()
+    cur.close()
+    conn.close()
+
+
+def disable_daily_push(user_id: str):
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("""
+        INSERT INTO daily_push_subscribers (user_id, enabled, updated_at)
+        VALUES (%s, FALSE, %s)
+        ON CONFLICT (user_id)
+        DO UPDATE SET enabled = FALSE, updated_at = EXCLUDED.updated_at;
+    """, (user_id, datetime.now(TZ_TW)))
+    conn.commit()
+    cur.close()
+    conn.close()
+
+
+def get_daily_push_users():
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT d.user_id
+        FROM daily_push_subscribers d
+        JOIN members m ON d.user_id = m.user_id
+        WHERE d.enabled = TRUE
           AND m.expires_at > %s;
     """, (datetime.now(TZ_TW),))
     rows = cur.fetchall()
@@ -990,7 +1041,7 @@ def cron_daily_push():
 
     try:
         init_db()
-        members = get_active_member_ids()
+        members = get_daily_push_users()
         now = datetime.now(TZ_TW)
         today_key = now.strftime("%Y-%m-%d")
 
@@ -1136,7 +1187,9 @@ def webhook():
                         "7) 賓果10期分析\n"
                         "8) 預測分析\n"
                         "9) 取消預測分析\n"
-                        "10) 我的到期日\n\n"
+                        "10) 開啟每日推播\n"
+                        "11) 取消每日推播\n"
+                        "12) 我的到期日\n\n"
                         "管理員：\n"
                         "1) 待確認 密碼\n"
                         "2) 確認 XXXXX 密碼"
@@ -1194,6 +1247,8 @@ def webhook():
                         continue
 
                     dt_tw = set_expiry_plus_days(target_user_id, 30)
+                    enable_daily_push(target_user_id)
+
                     reply_message(
                         reply_token,
                         "✅ 已開通\n\n"
@@ -1228,6 +1283,19 @@ def webhook():
                 if text == "取消預測分析":
                     disable_prediction(user_id)
                     reply_message(reply_token, "✅ 已取消預測分析推播")
+                    continue
+
+                if text == "開啟每日推播":
+                    if not is_member(user_id):
+                        reply_message(reply_token, "🌿 此功能屬於會員內容\n\n請先輸入：遊戲帳號 XXXXX")
+                    else:
+                        enable_daily_push(user_id)
+                        reply_message(reply_token, "✅ 已開啟每日推播")
+                    continue
+
+                if text == "取消每日推播":
+                    disable_daily_push(user_id)
+                    reply_message(reply_token, "✅ 已取消每日推播")
                     continue
 
                 if text == "今日陪跑":
