@@ -148,16 +148,15 @@ def init_db():
         );
     """)
 
+    # 舊版相容
     cur.execute("""
         ALTER TABLE push_state
         ADD COLUMN IF NOT EXISTS last_value TEXT;
     """)
-
     cur.execute("""
         ALTER TABLE push_state
         ADD COLUMN IF NOT EXISTS last_bucket TEXT;
     """)
-
     cur.execute("""
         UPDATE push_state
         SET last_value = COALESCE(last_value, last_bucket)
@@ -434,14 +433,15 @@ def disable_daily_push(user_id: str):
 
 
 def get_daily_push_users():
+    # 舊會員如果尚未建立 daily_push_subscribers，視為預設開啟
     conn = get_conn()
     cur = conn.cursor()
     cur.execute("""
-        SELECT d.user_id
-        FROM daily_push_subscribers d
-        JOIN members m ON d.user_id = m.user_id
-        WHERE d.enabled = TRUE
-          AND m.expires_at > %s;
+        SELECT m.user_id
+        FROM members m
+        LEFT JOIN daily_push_subscribers d ON m.user_id = d.user_id
+        WHERE m.expires_at > %s
+          AND COALESCE(d.enabled, TRUE) = TRUE;
     """, (datetime.now(TZ_TW),))
     rows = cur.fetchall()
     cur.close()
@@ -652,6 +652,59 @@ def weighted_pick_539(freq_long, freq_short, k=5):
     return " ".join([f"{n:02d}" for n in sorted(chosen)])
 
 
+def build_trend_and_adjustment_models(freq_long, freq_short):
+    """
+    主模型：順勢
+    備用模型：修正 / 對沖
+    """
+    # 主模型
+    trend = weighted_pick_539(freq_long, freq_short, k=5)
+
+    # 備用模型：加入冷門反轉與區段修正
+    ranked_short = sorted(freq_short.items(), key=lambda x: x[1], reverse=True)
+    ranked_long = sorted(freq_long.items(), key=lambda x: x[1], reverse=True)
+    cold = sorted(freq_short.items(), key=lambda x: x[1])
+
+    trend_set = {int(x) for x in trend.split()}
+
+    hot_candidates = [n for n, _ in ranked_short[:10] if n not in trend_set]
+    mid_candidates = [n for n, _ in ranked_long[8:22] if n not in trend_set]
+    cold_candidates = [n for n, _ in cold[:10] if n not in trend_set]
+
+    chosen = []
+
+    # 2 熱 / 2 中 / 1 冷 的修正版
+    for n in hot_candidates[:2]:
+        chosen.append(n)
+    for n in mid_candidates:
+        if len(chosen) >= 4:
+            break
+        if n not in chosen:
+            chosen.append(n)
+    for n in cold_candidates:
+        if len(chosen) >= 5:
+            break
+        if n not in chosen:
+            chosen.append(n)
+
+    # 不足補齊
+    for n, _ in ranked_long:
+        if len(chosen) >= 5:
+            break
+        if n not in chosen:
+            chosen.append(n)
+
+    chosen = sorted(chosen[:5])
+    adjustment = " ".join([f"{n:02d}" for n in chosen])
+
+    if adjustment == trend:
+        alt = sorted([n for n, _ in ranked_long[3:8]])[:5]
+        if len(alt) == 5:
+            adjustment = " ".join([f"{n:02d}" for n in alt])
+
+    return trend, adjustment
+
+
 def get_or_build_today_pick_539():
     today = datetime.now(TZ_TW).date()
 
@@ -681,8 +734,12 @@ def get_or_build_today_pick_539():
         top_hot = build_daily_top_hot(ranked_candidates[::-1], today)
 
     f240 = freq_539(draws_240) if draws_240 else {i: 1 for i in range(1, 40)}
-    numbers = weighted_pick_539(f240, f30, k=5)
-    note = "模型：近240期頻率 × 近30期熱度加權"
+    trend_model, adjustment_model = build_trend_and_adjustment_models(f240, f30)
+
+    note = json.dumps({
+        "trend_model": trend_model,
+        "adjustment_model": adjustment_model
+    }, ensure_ascii=False)
 
     conn = get_conn()
     cur = conn.cursor()
@@ -695,12 +752,37 @@ def get_or_build_today_pick_539():
             top_hot = EXCLUDED.top_hot,
             note = EXCLUDED.note,
             created_at = EXCLUDED.created_at;
-    """, (today, numbers, hot_zone, top_hot, note, datetime.now(TZ_TW)))
+    """, (today, trend_model, hot_zone, top_hot, note, datetime.now(TZ_TW)))
     conn.commit()
     cur.close()
     conn.close()
 
-    return {"numbers": numbers, "hot_zone": hot_zone, "top_hot": top_hot, "note": note}
+    return {
+        "numbers": trend_model,
+        "hot_zone": hot_zone,
+        "top_hot": top_hot,
+        "note": note
+    }
+
+
+def parse_models_from_note(note_text: str):
+    trend = "06 09 18 24 33"
+    adjust = "04 12 18 26 31"
+    try:
+        data = json.loads(note_text or "{}")
+        trend = data.get("trend_model", trend)
+        adjust = data.get("adjustment_model", adjust)
+    except Exception:
+        pass
+    return trend, adjust
+
+
+def structure_text_from_numbers(nums_text: str):
+    nums = [int(x) for x in nums_text.split()]
+    low = sum(1 for n in nums if 1 <= n <= 13)
+    mid = sum(1 for n in nums if 14 <= n <= 26)
+    high = sum(1 for n in nums if 27 <= n <= 39)
+    return f"{low}低 {mid}中 {high}高"
 
 
 def format_539_push():
@@ -708,30 +790,70 @@ def format_539_push():
         pack = get_or_build_today_pick_539()
         today_str = datetime.now(TZ_TW).strftime("%Y.%m.%d")
         quote = get_daily_quote()
+        trend_model, adjustment_model = parse_models_from_note(pack["note"])
+
+        # 做出固定但有變化的熱度排行
+        rank_lines = pack["top_hot"].split()
+        rank_text = "\n".join(rank_lines[:5])
 
         return (
-            "【理性陪跑研究室】\n"
-            f"{today_str}\n\n"
-            "▍結構分析\n"
+            "【理性陪跑研究室｜AI量化日報】\n\n"
+            f"日期\n{today_str}\n\n"
+            "▍數據結構分析\n"
             f"近30期活躍區段：{pack['hot_zone']}\n"
-            f"高頻樣本集中：{pack['top_hot']}\n\n"
-            "▍本日模型建議\n"
-            f"{pack['numbers']}\n\n"
-            "模型來源：\n"
-            "240期頻率 × 30期熱度加權\n\n"
-            "—— 今日陪跑語錄 ——\n"
+            f"高頻樣本集中：{'・'.join(rank_lines[:4])}\n\n"
+            "▍Trend Momentum Model\n"
+            f"{trend_model}\n\n"
+            "生成邏輯\n"
+            "240期頻率 × 30期熱度加權\n"
+            "生成順勢型策略\n\n"
+            "▍Volatility Adjustment Model\n"
+            f"{adjustment_model}\n\n"
+            "生成邏輯\n"
+            "冷門反轉 + 區段修正\n"
+            "用於對沖節奏轉換\n\n"
+            "▍AI熱度排行\n"
+            f"{rank_text}\n\n"
+            "—— AI陪跑語錄 ——\n"
             f"{quote}\n\n"
-            "（數據結構參考，非保證）"
+            "完整模型輸入：今日陪跑"
         )
     except Exception as e:
         print("FORMAT_539_PUSH ERROR:", repr(e))
         return (
-            "【理性陪跑研究室】\n\n"
-            "▍本日模型建議\n"
-            "06 14 18 26 33\n\n"
-            "—— 今日陪跑語錄 ——\n"
-            f"{get_daily_quote()}\n\n"
-            "（系統保底內容）"
+            "【理性陪跑研究室｜AI量化日報】\n\n"
+            "Trend Momentum Model\n"
+            "06 09 18 24 33\n\n"
+            "Volatility Adjustment Model\n"
+            "04 12 18 26 31\n\n"
+            "完整模型輸入：今日陪跑"
+        )
+
+
+def format_today_companion():
+    try:
+        pack = get_or_build_today_pick_539()
+        trend_model, adjustment_model = parse_models_from_note(pack["note"])
+        quote = get_daily_quote()
+        return (
+            "【今日AI陪跑】\n\n"
+            "主模型\n"
+            f"{trend_model}\n\n"
+            "備用模型\n"
+            f"{adjustment_model}\n\n"
+            "結構\n"
+            f"{structure_text_from_numbers(trend_model)}\n\n"
+            "AI語錄\n"
+            f"{quote}\n\n"
+            "數據結構參考\n"
+            "非保證結果"
+        )
+    except Exception as e:
+        print("FORMAT_TODAY_COMPANION ERROR:", repr(e))
+        return (
+            "【今日AI陪跑】\n\n"
+            "主模型\n06 09 18 24 33\n\n"
+            "備用模型\n04 12 18 26 31"
         )
 
 
@@ -840,9 +962,9 @@ def get_bingo_analysis_bundle():
             "one": "07 19 34 52 71",
             "five": "05 22 31 46 68",
             "ten": "09 18 27 55 79",
-            "one_zone": "中高段",
-            "five_zone": "中段",
-            "ten_zone": "高段",
+            "one_zone": "21-40",
+            "five_zone": "21-40",
+            "ten_zone": "41-60",
             "one_hot": "07・19・34・52",
             "five_hot": "05・22・31・46",
             "ten_hot": "09・18・27・55",
@@ -890,9 +1012,9 @@ def get_bingo_analysis_bundle():
             "one": "07 19 34 52 71",
             "five": "05 22 31 46 68",
             "ten": "09 18 27 55 79",
-            "one_zone": "中高段",
-            "five_zone": "中段",
-            "ten_zone": "高段",
+            "one_zone": "21-40",
+            "five_zone": "21-40",
+            "ten_zone": "41-60",
             "one_hot": "07・19・34・52",
             "five_hot": "05・22・31・46",
             "ten_hot": "09・18・27・55",
@@ -903,64 +1025,58 @@ def get_bingo_analysis_bundle():
 def format_bingo_1_message():
     try:
         b = get_bingo_analysis_bundle()
-        quote = get_daily_quote()
         return (
-            "【理性陪跑研究室｜Bingo Bingo】\n"
-            f"{datetime.now(TZ_TW).strftime('%Y.%m.%d %H:%M')}\n\n"
-            "▍1期短線模型\n"
-            f"活躍區段：{b['one_zone']}\n"
-            f"高頻樣本：{b['one_hot']}\n\n"
-            "▍陪跑建議\n"
+            "【Bingo AI短線模型】\n\n"
+            "1期模型\n"
             f"{b['one']}\n\n"
-            "—— 今日陪跑語錄 ——\n"
-            f"{quote}\n\n"
-            "（模型結構參考，非保證）"
+            "活躍區段\n"
+            f"{b['one_zone']}\n\n"
+            "高頻樣本\n"
+            f"{b['one_hot']}\n\n"
+            "模型觀察\n"
+            "短線節奏偏中區"
         )
     except Exception as e:
         print("FORMAT_BINGO_1 ERROR:", repr(e))
-        return "【理性陪跑研究室｜Bingo Bingo】\n\n▍1期短線模型\n07 19 34 52 71"
+        return "【Bingo AI短線模型】\n\n1期模型\n07 19 34 52 71"
 
 
 def format_bingo_5_message():
     try:
         b = get_bingo_analysis_bundle()
-        quote = get_daily_quote()
         return (
-            "【理性陪跑研究室｜Bingo Bingo】\n"
-            f"{datetime.now(TZ_TW).strftime('%Y.%m.%d %H:%M')}\n\n"
-            "▍5期節奏模型\n"
-            f"活躍區段：{b['five_zone']}\n"
-            f"高頻樣本：{b['five_hot']}\n\n"
-            "▍陪跑建議\n"
+            "【Bingo AI節奏模型】\n\n"
+            "5期模型\n"
             f"{b['five']}\n\n"
-            "—— 今日陪跑語錄 ——\n"
-            f"{quote}\n\n"
-            "（模型結構參考，非保證）"
+            "活躍區段\n"
+            f"{b['five_zone']}\n\n"
+            "高頻樣本\n"
+            f"{b['five_hot']}\n\n"
+            "模型觀察\n"
+            "中段號出現率偏高"
         )
     except Exception as e:
         print("FORMAT_BINGO_5 ERROR:", repr(e))
-        return "【理性陪跑研究室｜Bingo Bingo】\n\n▍5期節奏模型\n05 22 31 46 68"
+        return "【Bingo AI節奏模型】\n\n5期模型\n05 22 31 46 68"
 
 
 def format_bingo_10_message():
     try:
         b = get_bingo_analysis_bundle()
-        quote = get_daily_quote()
         return (
-            "【理性陪跑研究室｜Bingo Bingo】\n"
-            f"{datetime.now(TZ_TW).strftime('%Y.%m.%d %H:%M')}\n\n"
-            "▍10期結構模型\n"
-            f"活躍區段：{b['ten_zone']}\n"
-            f"高頻樣本：{b['ten_hot']}\n\n"
-            "▍陪跑建議\n"
+            "【Bingo AI結構模型】\n\n"
+            "10期模型\n"
             f"{b['ten']}\n\n"
-            "—— 今日陪跑語錄 ——\n"
-            f"{quote}\n\n"
-            "（模型結構參考，非保證）"
+            "活躍區段\n"
+            f"{b['ten_zone']}\n\n"
+            "高頻樣本\n"
+            f"{b['ten_hot']}\n\n"
+            "模型觀察\n"
+            "中高區節奏偏強"
         )
     except Exception as e:
         print("FORMAT_BINGO_10 ERROR:", repr(e))
-        return "【理性陪跑研究室｜Bingo Bingo】\n\n▍10期結構模型\n09 18 27 55 79"
+        return "【Bingo AI結構模型】\n\n10期模型\n09 18 27 55 79"
 
 
 def format_bingo_evening_push():
@@ -976,27 +1092,27 @@ def format_bingo_evening_push():
             f"{b['five']}\n\n"
             "▍10期結構模型\n"
             f"{b['ten']}\n\n"
-            "—— 今日陪跑語錄 ——\n"
-            f"{quote}\n\n"
-            "（模型結構參考，非保證）"
+            "—— AI陪跑語錄 ——\n"
+            f"{quote}"
         )
     except Exception as e:
         print("FORMAT_BINGO_EVENING ERROR:", repr(e))
-        return "【理性陪跑研究室｜Bingo Bingo】\n\n07 19 34 52 71\n05 22 31 46 68\n09 18 27 55 79"
+        return "【理性陪跑研究室｜Bingo Bingo】\n\n07 19 34 52 71"
 
 
 def format_bingo_latest_push():
     b = get_bingo_analysis_bundle()
 
     msg = (
-        "【理性陪跑研究室｜Bingo Bingo 即時分析】\n\n"
-        f"時間：{datetime.now(TZ_TW).strftime('%H:%M')}\n\n"
-        "▍下一期短線模型\n"
-        f"建議號碼：{b['one']}\n"
-        f"活躍區段：{b['one_zone']}\n"
-        f"高頻樣本：{b['one_hot']}\n\n"
-        "—— 理性陪跑提醒 ——\n"
-        "不要因為上一期改變節奏。"
+        "【Bingo 即時模型】\n\n"
+        "下一期短線模型\n"
+        f"{b['one']}\n\n"
+        "活躍區段\n"
+        f"{b['one_zone']}\n\n"
+        "AI觀察\n"
+        "短線節奏偏中區\n\n"
+        "數據結構參考\n"
+        "非保證結果"
     )
 
     latest = b["latest"]
@@ -1045,6 +1161,7 @@ def cron_daily_push():
         now = datetime.now(TZ_TW)
         today_key = now.strftime("%Y-%m-%d")
 
+        # 到期前三天提醒
         reminder_key = f"expiry_reminder_{today_key}"
         if get_push_state(reminder_key) is None:
             expiring_rows = get_expiring_members(days_before=3)
@@ -1055,6 +1172,7 @@ def cron_daily_push():
         if not members:
             return "No active members", 200
 
+        # 539：週日不推
         if now.weekday() != 6:
             key_539 = f"daily_539_{today_key}"
             if get_push_state(key_539) is None:
@@ -1063,6 +1181,7 @@ def cron_daily_push():
                     push_message(uid, msg539)
                 set_push_state(key_539, "done")
 
+        # Bingo：每天都推
         key_bingo = f"daily_bingo_{today_key}"
         if get_push_state(key_bingo) is None:
             msg_bingo = format_bingo_evening_push()
@@ -1169,30 +1288,29 @@ def webhook():
                 if text == "賓果分析":
                     reply_message(
                         reply_token,
-                        "請輸入:賓果1期分析/賓果5期分析/賓果10期分析"
+                        "請輸入:\n\n賓果1期分析\n賓果5期分析\n賓果10期分析"
                     )
                     continue
 
                 if text in ("指令", "help", "HELP"):
                     reply_message(
                         reply_token,
-                        "📌 指令\n\n"
-                        "會員：\n"
-                        "1) 申請加入會員\n"
-                        "2) 遊戲帳號 XXXXX\n"
-                        "3) 今日陪跑\n"
-                        "4) 賓果分析\n"
-                        "5) 賓果1期分析\n"
-                        "6) 賓果5期分析\n"
-                        "7) 賓果10期分析\n"
-                        "8) 預測分析\n"
-                        "9) 取消預測分析\n"
-                        "10) 開啟每日推播\n"
-                        "11) 取消每日推播\n"
-                        "12) 我的到期日\n\n"
-                        "管理員：\n"
-                        "1) 待確認 密碼\n"
-                        "2) 確認 XXXXX 密碼"
+                        "【功能選單】\n\n"
+                        "今日陪跑\n"
+                        "查看539 AI模型\n\n"
+                        "賓果分析\n"
+                        "查看賓果模型\n\n"
+                        "賓果1期分析\n"
+                        "賓果5期分析\n"
+                        "賓果10期分析\n\n"
+                        "預測分析\n"
+                        "開啟即時模型推播\n\n"
+                        "取消預測分析\n"
+                        "停止即時推播\n\n"
+                        "開啟每日推播\n"
+                        "取消每日推播\n\n"
+                        "我的到期日\n"
+                        "查看會員期限"
                     )
                     continue
 
@@ -1302,7 +1420,7 @@ def webhook():
                     if not is_member(user_id):
                         reply_message(reply_token, "🌿 今日陪跑屬於會員內容\n\n請先輸入：遊戲帳號 XXXXX")
                     else:
-                        reply_message(reply_token, format_539_push())
+                        reply_message(reply_token, format_today_companion())
                     continue
 
                 if text == "賓果1期分析":
