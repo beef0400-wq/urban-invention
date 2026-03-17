@@ -657,10 +657,8 @@ def build_trend_and_adjustment_models(freq_long, freq_short):
     主模型：順勢
     備用模型：修正 / 對沖
     """
-    # 主模型
     trend = weighted_pick_539(freq_long, freq_short, k=5)
 
-    # 備用模型：加入冷門反轉與區段修正
     ranked_short = sorted(freq_short.items(), key=lambda x: x[1], reverse=True)
     ranked_long = sorted(freq_long.items(), key=lambda x: x[1], reverse=True)
     cold = sorted(freq_short.items(), key=lambda x: x[1])
@@ -673,7 +671,6 @@ def build_trend_and_adjustment_models(freq_long, freq_short):
 
     chosen = []
 
-    # 2 熱 / 2 中 / 1 冷 的修正版
     for n in hot_candidates[:2]:
         chosen.append(n)
     for n in mid_candidates:
@@ -687,7 +684,6 @@ def build_trend_and_adjustment_models(freq_long, freq_short):
         if n not in chosen:
             chosen.append(n)
 
-    # 不足補齊
     for n, _ in ranked_long:
         if len(chosen) >= 5:
             break
@@ -782,7 +778,7 @@ def structure_text_from_numbers(nums_text: str):
     low = sum(1 for n in nums if 1 <= n <= 13)
     mid = sum(1 for n in nums if 14 <= n <= 26)
     high = sum(1 for n in nums if 27 <= n <= 39)
-    return f"{low}低 {mid}中 {high}高"
+    return f"低區{low}｜中區{mid}｜高區{high}"
 
 
 def format_539_push():
@@ -792,7 +788,6 @@ def format_539_push():
         quote = get_daily_quote()
         trend_model, adjustment_model = parse_models_from_note(pack["note"])
 
-        # 做出固定但有變化的熱度排行
         rank_lines = pack["top_hot"].split()
         rank_text = "\n".join(rank_lines[:5])
 
@@ -835,25 +830,36 @@ def format_today_companion():
         pack = get_or_build_today_pick_539()
         trend_model, adjustment_model = parse_models_from_note(pack["note"])
         quote = get_daily_quote()
+
         return (
             "【今日AI陪跑】\n\n"
-            "主模型\n"
+            "▍Trend Model\n"
             f"{trend_model}\n\n"
-            "備用模型\n"
+            "▍Adjustment Model\n"
             f"{adjustment_model}\n\n"
-            "結構\n"
-            f"{structure_text_from_numbers(trend_model)}\n\n"
-            "AI語錄\n"
+            "▍結構分析\n"
+            f"{structure_text_from_numbers(trend_model)}\n"
+            f"活躍區段：{pack['hot_zone']}\n"
+            f"高頻樣本：{'・'.join(pack['top_hot'].split()[:4])}\n\n"
+            "▍策略解讀\n"
+            "Trend Model：\n"
+            "順應近期數據節奏，\n"
+            "作為今日主要參考模型\n\n"
+            "Adjustment Model：\n"
+            "考慮短期波動與冷門修正，\n"
+            "作為節奏轉換時的對沖模型\n\n"
+            "▍AI陪跑語錄\n"
             f"{quote}\n\n"
-            "數據結構參考\n"
-            "非保證結果"
+            "（數據結構參考，非保證）"
         )
     except Exception as e:
         print("FORMAT_TODAY_COMPANION ERROR:", repr(e))
         return (
             "【今日AI陪跑】\n\n"
-            "主模型\n06 09 18 24 33\n\n"
-            "備用模型\n04 12 18 26 31"
+            "▍Trend Model\n"
+            "06 09 18 24 33\n\n"
+            "▍Adjustment Model\n"
+            "04 12 18 26 31"
         )
 
 
