@@ -1031,58 +1031,90 @@ def get_bingo_analysis_bundle():
 def format_bingo_1_message():
     try:
         b = get_bingo_analysis_bundle()
+
         return (
-            "【Bingo AI短線模型】\n\n"
-            "1期模型\n"
+            "【Bingo AI短線分析】\n\n"
+            "1期分析\n"
             f"{b['one']}\n\n"
             "活躍區段\n"
             f"{b['one_zone']}\n\n"
             "高頻樣本\n"
             f"{b['one_hot']}\n\n"
-            "模型觀察\n"
-            "短線節奏偏中區"
+            "數據觀察\n"
+            "短線熱度集中在中區，\n"
+            "高段號碼出現間隔拉長。\n\n"
+            "分析結論\n"
+            "短線節奏偏中區，\n"
+            "高區補位機率存在。\n\n"
+            "（數據結構參考）"
         )
+
     except Exception as e:
         print("FORMAT_BINGO_1 ERROR:", repr(e))
-        return "【Bingo AI短線模型】\n\n1期模型\n07 19 34 52 71"
+        return (
+            "【Bingo AI短線分析】\n\n"
+            "1期分析\n"
+            "07 19 34 52 71"
+        )
 
 
 def format_bingo_5_message():
     try:
         b = get_bingo_analysis_bundle()
+
         return (
-            "【Bingo AI節奏模型】\n\n"
-            "5期模型\n"
+            "【Bingo AI節奏分析】\n\n"
+            "5期分析\n"
             f"{b['five']}\n\n"
             "活躍區段\n"
             f"{b['five_zone']}\n\n"
             "高頻樣本\n"
             f"{b['five_hot']}\n\n"
-            "模型觀察\n"
-            "中段號出現率偏高"
+            "數據觀察\n"
+            "近5期中段號活躍度明顯提升，\n"
+            "低區補位頻率增加。\n\n"
+            "分析結論\n"
+            "目前節奏偏向中段延續，\n"
+            "短線可優先觀察中區帶。\n\n"
+            "（數據結構參考）"
         )
+
     except Exception as e:
         print("FORMAT_BINGO_5 ERROR:", repr(e))
-        return "【Bingo AI節奏模型】\n\n5期模型\n05 22 31 46 68"
-
+        return (
+            "【Bingo AI節奏分析】\n\n"
+            "5期分析\n"
+            "05 22 31 46 68"
+        )
 
 def format_bingo_10_message():
     try:
         b = get_bingo_analysis_bundle()
+
         return (
-            "【Bingo AI結構模型】\n\n"
-            "10期模型\n"
+            "【Bingo AI結構分析】\n\n"
+            "10期分析\n"
             f"{b['ten']}\n\n"
             "活躍區段\n"
             f"{b['ten_zone']}\n\n"
             "高頻樣本\n"
             f"{b['ten_hot']}\n\n"
-            "模型觀察\n"
-            "中高區節奏偏強"
+            "數據觀察\n"
+            "近10期中高區活躍，\n"
+            "低區出現頻率下降。\n\n"
+            "分析結論\n"
+            "整體節奏偏中高區，\n"
+            "短線仍有延續機會。\n\n"
+            "（數據結構參考）"
         )
+
     except Exception as e:
         print("FORMAT_BINGO_10 ERROR:", repr(e))
-        return "【Bingo AI結構模型】\n\n10期模型\n09 18 27 55 79"
+        return (
+            "【Bingo AI結構分析】\n\n"
+            "10期分析\n"
+            "09 18 27 55 79"
+        )
 
 
 def format_bingo_evening_push():
