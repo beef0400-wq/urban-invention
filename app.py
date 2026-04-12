@@ -203,6 +203,44 @@ def reply_message(reply_token: str, text: str):
             print("LINE REPLY BODY:", r.text[:500])
     except Exception as e:
         print("LINE REPLY EXCEPTION:", repr(e))
+def reply_bingo_menu(reply_token: str):
+    if not CHANNEL_ACCESS_TOKEN:
+        print("CHANNEL_ACCESS_TOKEN empty")
+        return
+
+    url = "https://api.line.me/v2/bot/message/reply"
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {CHANNEL_ACCESS_TOKEN}",
+    }
+
+    payload = {
+        "replyToken": reply_token,
+        "messages": [
+            {
+                "type": "template",
+                "altText": "Bingo分析選單",
+                "template": {
+                    "type": "buttons",
+                    "title": "Bingo 分析",
+                    "text": "請選擇期數",
+                    "actions": [
+                        {"type": "message", "label": "1期", "text": "1期"},
+                        {"type": "message", "label": "5期", "text": "5期"},
+                        {"type": "message", "label": "10期", "text": "10期"}
+                    ]
+                }
+            }
+        ]
+    }
+
+    try:
+        r = requests.post(url, headers=headers, data=json.dumps(payload), timeout=10)
+        print("LINE BUTTON REPLY STATUS:", r.status_code)
+        if r.status_code >= 400:
+            print("LINE BUTTON REPLY BODY:", r.text[:500])
+    except Exception as e:
+        print("LINE BUTTON REPLY EXCEPTION:", repr(e))
 
 
 def push_message(user_id: str, text: str) -> bool:
