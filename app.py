@@ -1361,10 +1361,9 @@ def webhook():
                     )
                     continue
 
-               if text == "賓果分析":
-                   reply_bingo_menu(reply_token)
-                   continue
-
+                if text == "賓果分析":
+                    reply_bingo_menu(reply_token)
+                    continue
                 if text in ("指令", "help", "HELP"):
                     reply_message(
                         reply_token,
