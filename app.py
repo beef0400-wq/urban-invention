@@ -1461,21 +1461,21 @@ def webhook():
                         reply_message(reply_token, format_today_companion())
                     continue
 
-                if text == "賓果1期分析":
+                if text in ("1期", "賓果1期分析"):
                     if not is_member(user_id):
                         reply_message(reply_token, "🌿 賓果1期分析屬於會員內容\n\n請先輸入：遊戲帳號 XXXXX")
                     else:
                         reply_message(reply_token, format_bingo_1_message())
                     continue
 
-                if text == "賓果5期分析":
+                if text in ("5期", "賓果5期分析"):
                     if not is_member(user_id):
                         reply_message(reply_token, "🌿 賓果5期分析屬於會員內容\n\n請先輸入：遊戲帳號 XXXXX")
                     else:
                         reply_message(reply_token, format_bingo_5_message())
                     continue
 
-                if text == "賓果10期分析":
+                if text in ("10期", "賓果10期分析"):
                     if not is_member(user_id):
                         reply_message(reply_token, "🌿 賓果10期分析屬於會員內容\n\n請先輸入：遊戲帳號 XXXXX")
                     else:
