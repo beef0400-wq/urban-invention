@@ -99,6 +99,14 @@ def init_db():
     """)
 
     cur.execute("""
+        CREATE TABLE IF NOT EXISTS free_trials (
+            user_id TEXT PRIMARY KEY,
+            started_at TIMESTAMPTZ NOT NULL,
+            expires_at TIMESTAMPTZ NOT NULL
+        );
+    """)
+
+    cur.execute("""
         CREATE TABLE IF NOT EXISTS pending_accounts (
             game_account TEXT PRIMARY KEY,
             user_id TEXT NOT NULL,
@@ -298,6 +306,63 @@ def get_expiry(user_id: str):
     cur.close()
     conn.close()
     return row[0] if row else None
+
+
+def has_used_free_trial(user_id: str) -> bool:
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("SELECT 1 FROM free_trials WHERE user_id = %s;", (user_id,))
+    row = cur.fetchone()
+    cur.close()
+    conn.close()
+    return row is not None
+
+
+def start_free_trial(user_id: str, hours: int = 24):
+    """開通一次性免費試用。已開通會員或已試用者不重複開通。"""
+    if not user_id:
+        return None, "no_user"
+
+    if is_member(user_id):
+        return get_expiry(user_id), "already_member"
+
+    if has_used_free_trial(user_id):
+        return None, "used"
+
+    now_tw = datetime.now(TZ_TW)
+    exp_tw = now_tw + timedelta(hours=hours)
+
+    conn = get_conn()
+    cur = conn.cursor()
+    try:
+        cur.execute("""
+            INSERT INTO members (user_id, expires_at)
+            VALUES (%s, %s)
+            ON CONFLICT (user_id) DO UPDATE SET expires_at = EXCLUDED.expires_at;
+        """, (user_id, exp_tw))
+
+        cur.execute("""
+            INSERT INTO free_trials (user_id, started_at, expires_at)
+            VALUES (%s, %s, %s)
+            ON CONFLICT (user_id) DO NOTHING;
+        """, (user_id, now_tw, exp_tw))
+
+        cur.execute("""
+            INSERT INTO daily_push_subscribers (user_id, enabled, updated_at)
+            VALUES (%s, TRUE, %s)
+            ON CONFLICT (user_id)
+            DO UPDATE SET enabled = TRUE, updated_at = EXCLUDED.updated_at;
+        """, (user_id, now_tw))
+
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        cur.close()
+        conn.close()
+
+    return exp_tw, "opened"
 
 
 def is_member(user_id: str) -> bool:
@@ -660,83 +725,370 @@ def freq_539(draws_240):
     return f
 
 
-def weighted_pick_539(freq_long, freq_short, k=5):
-    maxL = max(freq_long.values()) or 1
-    maxS = max(freq_short.values()) or 1
+def _fmt_nums(nums):
+    return " ".join([f"{int(n):02d}" for n in sorted(set(nums))])
 
-    weights = {}
-    for n in range(1, 40):
-        wl = freq_long[n] / maxL
-        ws = freq_short[n] / maxS
-        weights[n] = 0.6 * wl + 0.4 * ws + 0.01
 
+def _parse_nums_text(nums_text: str):
+    try:
+        return [int(x) for x in (nums_text or "").split()]
+    except Exception:
+        return []
+
+
+def _normalize_score(score_dict):
+    vals = list(score_dict.values())
+    mn = min(vals) if vals else 0
+    mx = max(vals) if vals else 1
+    if mx == mn:
+        return {k: 0.5 for k in score_dict}
+    return {k: (v - mn) / (mx - mn) for k, v in score_dict.items()}
+
+
+def _freq_slice(draws, size):
+    return freq_539(draws[:size]) if draws else {i: 0 for i in range(1, 40)}
+
+
+def _gap_score_539(draws):
+    """
+    遺漏值 / 回補分數：
+    - 太近剛開：降權
+    - 中度遺漏：加權
+    - 超長遺漏：保留爆發補位
+    """
+    gap = {i: len(draws) + 5 for i in range(1, 40)}
+    for idx, (_, nums) in enumerate(draws):
+        for n in nums:
+            if gap[n] == len(draws) + 5:
+                gap[n] = idx
+
+    score = {}
+    for n, g in gap.items():
+        if g <= 1:
+            score[n] = 0.10
+        elif 2 <= g <= 5:
+            score[n] = 0.55
+        elif 6 <= g <= 14:
+            score[n] = 1.00
+        elif 15 <= g <= 28:
+            score[n] = 0.78
+        else:
+            score[n] = 0.62
+    return score, gap
+
+
+def _head_of(n):
+    # 0頭：01-09；1頭：10-19；2頭：20-29；3頭：30-39
+    return n // 10
+
+
+def _tail_of(n):
+    return n % 10
+
+
+def _head_pattern_score_539(draws):
+    score_by_head = {0: 0.50, 1: 0.50, 2: 0.50, 3: 0.50}
+    if not draws:
+        return {n: 0.5 for n in range(1, 40)}, "資料不足"
+
+    latest_heads = [_head_of(n) for n in draws[0][1]]
+    latest_count = {h: latest_heads.count(h) for h in range(4)}
+
+    for h in range(4):
+        if latest_count[h] >= 3:
+            score_by_head[h] -= 0.22
+        elif latest_count[h] == 0:
+            score_by_head[h] += 0.22
+        elif latest_count[h] == 1:
+            score_by_head[h] += 0.08
+
+    dom_heads = []
+    for _, nums in draws[:3]:
+        hs = [_head_of(n) for n in nums]
+        dom_heads.append(max(range(4), key=lambda h: hs.count(h)))
+    if len(dom_heads) >= 2:
+        seq = list(reversed(dom_heads))
+        if len(seq) >= 2 and seq[-1] == (seq[-2] + 1) % 4:
+            score_by_head[(seq[-1] + 1) % 4] += 0.18
+
+    note = "｜".join([f"{h}頭{latest_count[h]}顆" for h in range(4)])
+    return {n: max(0.05, score_by_head[_head_of(n)]) for n in range(1, 40)}, note
+
+
+def _tail_pattern_score_539(draws):
+    score_by_tail = {t: 0.50 for t in range(10)}
+    if not draws:
+        return {n: 0.5 for n in range(1, 40)}, "資料不足"
+
+    latest_tails = [_tail_of(n) for n in draws[0][1]]
+    latest_count = {t: latest_tails.count(t) for t in range(10)}
+
+    burst_tails = [t for t, c in latest_count.items() if c >= 2]
+    for t in burst_tails:
+        score_by_tail[t] -= 0.18
+        score_by_tail[(t + 3) % 10] += 0.24
+        score_by_tail[(t + 5) % 10] += 0.15
+        score_by_tail[(t + 7) % 10] += 0.10
+
+    recent5 = draws[:5]
+    tail5 = {t: 0 for t in range(10)}
+    for _, nums in recent5:
+        for n in nums:
+            tail5[_tail_of(n)] += 1
+    avg5 = sum(tail5.values()) / 10 if tail5 else 0
+    for t in range(10):
+        if tail5[t] <= max(0, avg5 - 1.5):
+            score_by_tail[t] += 0.12
+        elif tail5[t] >= avg5 + 2.0:
+            score_by_tail[t] -= 0.10
+
+    note = "｜".join([f"{t}尾{latest_count[t]}顆" for t in range(10) if latest_count[t] > 0])
+    if not note:
+        note = "尾數分散"
+    return {n: max(0.05, score_by_tail[_tail_of(n)]) for n in range(1, 40)}, note
+
+
+def _adjacency_score_539(draws):
+    score = {i: 0.35 for i in range(1, 40)}
+    if not draws:
+        return score
+    recent_nums = []
+    for _, nums in draws[:3]:
+        recent_nums.extend(nums)
+    for n in recent_nums:
+        for nb in (n - 1, n + 1):
+            if 1 <= nb <= 39:
+                score[nb] += 0.22
+        for nb in (n - 2, n + 2):
+            if 1 <= nb <= 39:
+                score[nb] += 0.08
+    return score
+
+
+def _weighted_sample_without_replacement(items, weights, k, rng):
+    pool = list(items)
     chosen = []
-    pool = dict(weights)
-    for _ in range(k):
-        total = sum(pool.values())
-        r = random.uniform(0, total)
+    while pool and len(chosen) < k:
+        total = sum(max(0.001, weights.get(n, 0.001)) for n in pool)
+        r = rng.uniform(0, total)
         acc = 0
-        pick = None
-        for n, w in pool.items():
-            acc += w
+        pick = pool[-1]
+        for n in pool:
+            acc += max(0.001, weights.get(n, 0.001))
             if r <= acc:
                 pick = n
                 break
-        if pick is None:
-            pick = random.choice(list(pool.keys()))
         chosen.append(pick)
-        pool.pop(pick, None)
+        pool.remove(pick)
+    return chosen
 
-    return " ".join([f"{n:02d}" for n in sorted(chosen)])
+
+def _zone_counts(nums):
+    return {
+        "low": sum(1 for n in nums if 1 <= n <= 13),
+        "mid": sum(1 for n in nums if 14 <= n <= 26),
+        "high": sum(1 for n in nums if 27 <= n <= 39),
+    }
 
 
-def build_trend_and_adjustment_models(freq_long, freq_short):
+def _zone_name(n):
+    if 1 <= n <= 13:
+        return "low"
+    if 14 <= n <= 26:
+        return "mid"
+    return "high"
+
+
+def _repair_motherboard_zone(nums, ranked_candidates):
+    """母盤9碼區段修正：避免全擠同區，維持 2~4 顆區間。"""
+    nums = sorted(set(nums))
+    counts = _zone_counts(nums)
+    selected = set(nums)
+
+    for zone in ("low", "mid", "high"):
+        while counts[zone] < 2:
+            add = None
+            for n in ranked_candidates:
+                if n not in selected and _zone_name(n) == zone:
+                    add = n
+                    break
+            if add is None:
+                break
+
+            over_zone = max(counts, key=lambda z: counts[z])
+            removable = [x for x in nums if _zone_name(x) == over_zone]
+            if not removable:
+                break
+            remove = removable[-1]
+            nums.remove(remove)
+            selected.remove(remove)
+            counts[_zone_name(remove)] -= 1
+
+            nums.append(add)
+            selected.add(add)
+            counts[zone] += 1
+            nums = sorted(nums)
+
+    return sorted(nums[:9])
+
+
+def build_motherboard_models_539(draws_240):
     """
-    主模型：順勢
-    備用模型：修正 / 對沖
+    539 商業版母盤引擎：
+    - 頻率：30/120/240期
+    - 遺漏值：gap 回補
+    - 頭數輪動：0頭/1頭/2頭/3頭
+    - 尾數型態：同尾爆量、關聯尾、斷層尾
+    - 鄰號補位：近期開出號碼的前後鄰號
+    最後產出：9碼母盤、3碼主軸、5碼主攻、8碼爆發。
     """
-    trend = weighted_pick_539(freq_long, freq_short, k=5)
+    today = datetime.now(TZ_TW).date()
+    rng = random.Random(f"539-motherboard-v3-{today.isoformat()}")
 
-    ranked_short = sorted(freq_short.items(), key=lambda x: x[1], reverse=True)
-    ranked_long = sorted(freq_long.items(), key=lambda x: x[1], reverse=True)
-    cold = sorted(freq_short.items(), key=lambda x: x[1])
+    if not draws_240:
+        fallback = [4, 8, 13, 18, 21, 27, 33, 36, 39]
+        return {
+            "motherboard": _fmt_nums(fallback),
+            "core": _fmt_nums([18, 21, 33]),
+            "stable2": _fmt_nums([18, 21, 33]),
+            "attack3": _fmt_nums([8, 18, 21, 33, 36]),
+            "burst4": _fmt_nums([4, 8, 18, 21, 27, 33, 36, 39]),
+            "pattern_note": "資料不足，使用備援母盤",
+            "tail_note": "資料不足",
+            "cold_note": "04",
+            "head_note": "資料不足"
+        }
 
-    trend_set = {int(x) for x in trend.split()}
+    f30 = _freq_slice(draws_240, 30)
+    f120 = _freq_slice(draws_240, 120)
+    f240 = _freq_slice(draws_240, 240)
+    gap_score, gap_raw = _gap_score_539(draws_240)
+    head_score, head_note = _head_pattern_score_539(draws_240)
+    tail_score, tail_note = _tail_pattern_score_539(draws_240)
+    adj_score = _adjacency_score_539(draws_240)
 
-    hot_candidates = [n for n, _ in ranked_short[:10] if n not in trend_set]
-    mid_candidates = [n for n, _ in ranked_long[8:22] if n not in trend_set]
-    cold_candidates = [n for n, _ in cold[:10] if n not in trend_set]
+    nf30 = _normalize_score(f30)
+    nf120 = _normalize_score(f120)
+    nf240 = _normalize_score(f240)
+    ngap = _normalize_score(gap_score)
+    nhead = _normalize_score(head_score)
+    ntail = _normalize_score(tail_score)
+    nadj = _normalize_score(adj_score)
 
-    chosen = []
+    score = {}
+    for n in range(1, 40):
+        noise = rng.uniform(0, 0.035)
+        score[n] = (
+            0.30 * nf30[n] +
+            0.20 * nf120[n] +
+            0.12 * nf240[n] +
+            0.16 * ngap[n] +
+            0.10 * nhead[n] +
+            0.10 * ntail[n] +
+            0.07 * nadj[n] +
+            noise
+        )
 
-    for n in hot_candidates[:2]:
-        chosen.append(n)
-    for n in mid_candidates:
-        if len(chosen) >= 4:
-            break
-        if n not in chosen:
-            chosen.append(n)
+    ranked = [n for n, _ in sorted(score.items(), key=lambda x: x[1], reverse=True)]
+    candidate_pool = ranked[:24]
+
+    cold_candidates = [n for n, _ in sorted(gap_raw.items(), key=lambda x: x[1], reverse=True)[:8]]
+    for n in cold_candidates[:3]:
+        if n not in candidate_pool:
+            candidate_pool.append(n)
+
+    motherboard = _weighted_sample_without_replacement(candidate_pool, score, 9, rng)
+
+    cold_pick = None
     for n in cold_candidates:
-        if len(chosen) >= 5:
+        if n not in motherboard:
+            cold_pick = n
             break
-        if n not in chosen:
-            chosen.append(n)
+    if cold_pick is not None:
+        weakest = min(motherboard, key=lambda x: score.get(x, 0))
+        if gap_raw.get(cold_pick, 0) >= 10 and score.get(cold_pick, 0) >= 0.35:
+            motherboard.remove(weakest)
+            motherboard.append(cold_pick)
 
-    for n, _ in ranked_long:
-        if len(chosen) >= 5:
+    motherboard = _repair_motherboard_zone(motherboard, ranked)
+
+    mb_ranked = sorted(motherboard, key=lambda n: score[n], reverse=True)
+    core = []
+    for n in mb_ranked:
+        if len(core) < 3:
+            if len(core) < 2 or _zone_name(n) not in [_zone_name(x) for x in core] or len(core) == 2:
+                core.append(n)
+    if len(core) < 3:
+        for n in mb_ranked:
+            if n not in core:
+                core.append(n)
+            if len(core) >= 3:
+                break
+
+    attack3 = list(core)
+    for n in mb_ranked:
+        if n not in attack3:
+            attack3.append(n)
+        if len(attack3) >= 5:
             break
-        if n not in chosen:
-            chosen.append(n)
 
-    chosen = sorted(chosen[:5])
-    adjustment = " ".join([f"{n:02d}" for n in chosen])
+    burst4 = list(attack3)
+    for n in motherboard:
+        if n not in burst4:
+            burst4.append(n)
+        if len(burst4) >= 8:
+            break
 
-    if adjustment == trend:
-        alt = sorted([n for n, _ in ranked_long[3:8]])[:5]
-        if len(alt) == 5:
-            adjustment = " ".join([f"{n:02d}" for n in alt])
+    stable2 = list(core)
 
-    return trend, adjustment
+    cold_note_nums = [n for n in motherboard if gap_raw.get(n, 0) >= 10]
+    cold_note = _fmt_nums(cold_note_nums[:3]) if cold_note_nums else _fmt_nums(cold_candidates[:2])
+
+    pattern_note = (
+        f"頭數：{head_note}\n"
+        f"尾數：{tail_note}\n"
+        f"區段：{structure_text_from_numbers(_fmt_nums(motherboard))}"
+    )
+
+    return {
+        "motherboard": _fmt_nums(motherboard),
+        "core": _fmt_nums(core),
+        "stable2": _fmt_nums(stable2),
+        "attack3": _fmt_nums(attack3),
+        "burst4": _fmt_nums(burst4),
+        "pattern_note": pattern_note,
+        "tail_note": tail_note,
+        "cold_note": cold_note,
+        "head_note": head_note
+    }
+
+
+def build_daily_top_hot(ranked_candidates, pick_date):
+    top_pool = ranked_candidates[:16] if len(ranked_candidates) >= 16 else ranked_candidates[:]
+    if not top_pool:
+        return "01 02 03 04 05"
+
+    rng = random.Random(f"539-top-hot-v2-{pick_date.isoformat()}")
+    rng.shuffle(top_pool)
+
+    weighted_pool = []
+    for n, score in top_pool:
+        copies = max(1, score)
+        weighted_pool.extend([n] * copies)
+
+    chosen = set()
+    safe_guard = 0
+    while len(chosen) < min(5, len(top_pool)) and safe_guard < 200:
+        safe_guard += 1
+        chosen.add(rng.choice(weighted_pool))
+
+    if len(chosen) < 5:
+        for n, _ in top_pool:
+            chosen.add(n)
+            if len(chosen) >= 5:
+                break
+
+    return " ".join([f"{n:02d}" for n in sorted(list(chosen)[:5])])
 
 
 def get_or_build_today_pick_539():
@@ -767,13 +1119,9 @@ def get_or_build_today_pick_539():
     if prev_top_hot and prev_top_hot == top_hot:
         top_hot = build_daily_top_hot(ranked_candidates[::-1], today)
 
-    f240 = freq_539(draws_240) if draws_240 else {i: 1 for i in range(1, 40)}
-    trend_model, adjustment_model = build_trend_and_adjustment_models(f240, f30)
+    models = build_motherboard_models_539(draws_240)
 
-    note = json.dumps({
-        "trend_model": trend_model,
-        "adjustment_model": adjustment_model
-    }, ensure_ascii=False)
+    note = json.dumps(models, ensure_ascii=False)
 
     conn = get_conn()
     cur = conn.cursor()
@@ -786,13 +1134,13 @@ def get_or_build_today_pick_539():
             top_hot = EXCLUDED.top_hot,
             note = EXCLUDED.note,
             created_at = EXCLUDED.created_at;
-    """, (today, trend_model, hot_zone, top_hot, note, datetime.now(TZ_TW)))
+    """, (today, models["motherboard"], hot_zone, top_hot, note, datetime.now(TZ_TW)))
     conn.commit()
     cur.close()
     conn.close()
 
     return {
-        "numbers": trend_model,
+        "numbers": models["motherboard"],
         "hot_zone": hot_zone,
         "top_hot": top_hot,
         "note": note
@@ -800,15 +1148,45 @@ def get_or_build_today_pick_539():
 
 
 def parse_models_from_note(note_text: str):
-    trend = "06 09 18 24 33"
-    adjust = "04 12 18 26 31"
+    fallback = {
+        "motherboard": "04 08 13 18 21 27 33 36 39",
+        "core": "18 21 33",
+        "stable2": "18 21 33",
+        "attack3": "08 18 21 33 36",
+        "burst4": "04 08 18 21 27 33 36 39",
+        "pattern_note": "頭數/尾數/區段綜合分析",
+        "cold_note": "04 27",
+        "head_note": "資料不足",
+        "tail_note": "資料不足"
+    }
     try:
         data = json.loads(note_text or "{}")
-        trend = data.get("trend_model", trend)
-        adjust = data.get("adjustment_model", adjust)
+        if "trend_model" in data or "adjustment_model" in data:
+            trend = data.get("trend_model", "06 09 18 24 33")
+            adjust = data.get("adjustment_model", "04 12 18 26 31")
+            trend_nums = _parse_nums_text(trend)
+            adjust_nums = _parse_nums_text(adjust)
+            merged = sorted(set(trend_nums + adjust_nums))[:9]
+            if len(merged) < 9:
+                merged += [n for n in range(1, 40) if n not in merged][:9-len(merged)]
+            return {
+                "motherboard": _fmt_nums(merged),
+                "core": _fmt_nums(trend_nums[:3] if len(trend_nums) >= 3 else merged[:3]),
+                "stable2": _fmt_nums(trend_nums[:3] if len(trend_nums) >= 3 else merged[:3]),
+                "attack3": _fmt_nums(trend_nums[:5] if len(trend_nums) >= 5 else merged[:5]),
+                "burst4": _fmt_nums(merged[:8]),
+                "pattern_note": "舊版快取轉換：建議明日自動更新新版母盤",
+                "cold_note": _fmt_nums(adjust_nums[:2]) if adjust_nums else "04 27",
+                "head_note": "舊版快取",
+                "tail_note": "舊版快取"
+            }
+
+        for k in fallback:
+            if k not in data or not data.get(k):
+                data[k] = fallback[k]
+        return data
     except Exception:
-        pass
-    return trend, adjust
+        return fallback
 
 
 def structure_text_from_numbers(nums_text: str):
@@ -824,68 +1202,76 @@ def format_539_push():
         pack = get_or_build_today_pick_539()
         today_str = datetime.now(TZ_TW).strftime("%Y.%m.%d")
         quote = get_daily_quote()
-        trend_model, adjustment_model = parse_models_from_note(pack["note"])
+        m = parse_models_from_note(pack["note"])
 
         rank_lines = pack["top_hot"].split()
         rank_text = "\n".join(rank_lines[:5])
 
         return (
-            "【理性陪跑研究室｜AI量化日報】\n\n"
+            "【理性陪跑研究室｜539 AI母盤日報】\n\n"
             f"日期\n{today_str}\n\n"
-            "▍數據結構分析\n"
+            "▍今日核心母盤（9碼）\n"
+            f"{m['motherboard']}\n\n"
+            "▍主軸號（2星穩定）\n"
+            f"{m['stable2']}\n\n"
+            "▍3星主攻盤\n"
+            f"{m['attack3']}\n\n"
+            "▍4星爆發盤\n"
+            f"{m['burst4']}\n\n"
+            "▍結構分析\n"
+            f"{structure_text_from_numbers(m['motherboard'])}\n"
             f"近30期活躍區段：{pack['hot_zone']}\n"
-            f"高頻樣本集中：{'・'.join(rank_lines[:4])}\n\n"
-            "▍Trend Momentum Model\n"
-            f"{trend_model}\n\n"
-            "生成邏輯\n"
-            "240期頻率 × 30期熱度加權\n"
-            "生成順勢型策略\n\n"
-            "▍Volatility Adjustment Model\n"
-            f"{adjustment_model}\n\n"
-            "生成邏輯\n"
-            "冷門反轉 + 區段修正\n"
-            "用於對沖節奏轉換\n\n"
+            f"冷號補位：{m.get('cold_note', '無')}\n"
+            f"高頻樣本：{'・'.join(rank_lines[:4])}\n\n"
+            "▍型態判斷\n"
+            f"{m.get('pattern_note', '')}\n\n"
             "▍AI熱度排行\n"
             f"{rank_text}\n\n"
+            "▍使用邏輯\n"
+            "2星看主軸，3星看主攻，4星看爆發盤。\n"
+            "三層都來自同一組母盤，不是分開亂數。\n\n"
             "—— AI陪跑語錄 ——\n"
             f"{quote}\n\n"
-            "完整模型輸入：今日陪跑"
+            "（數據結構參考，非保證）"
         )
     except Exception as e:
         print("FORMAT_539_PUSH ERROR:", repr(e))
         return (
-            "【理性陪跑研究室｜AI量化日報】\n\n"
-            "Trend Momentum Model\n"
-            "06 09 18 24 33\n\n"
-            "Volatility Adjustment Model\n"
-            "04 12 18 26 31\n\n"
-            "完整模型輸入：今日陪跑"
+            "【理性陪跑研究室｜539 AI母盤日報】\n\n"
+            "核心母盤\n04 08 13 18 21 27 33 36 39\n\n"
+            "主軸號\n18 21 33\n\n"
+            "3星主攻盤\n08 18 21 33 36\n\n"
+            "4星爆發盤\n04 08 18 21 27 33 36 39"
         )
 
 
 def format_today_companion():
     try:
         pack = get_or_build_today_pick_539()
-        trend_model, adjustment_model = parse_models_from_note(pack["note"])
+        m = parse_models_from_note(pack["note"])
         quote = get_daily_quote()
 
         return (
-            "【今日AI陪跑】\n\n"
-            "▍Trend Model\n"
-            f"{trend_model}\n\n"
-            "▍Adjustment Model\n"
-            f"{adjustment_model}\n\n"
+            "【今日539 AI母盤】\n\n"
+            "▍核心母盤\n"
+            f"{m['motherboard']}\n\n"
+            "▍主軸號｜2星穩定\n"
+            f"{m['stable2']}\n\n"
+            "▍3星主攻\n"
+            f"{m['attack3']}\n\n"
+            "▍4星爆發\n"
+            f"{m['burst4']}\n\n"
             "▍結構分析\n"
-            f"{structure_text_from_numbers(trend_model)}\n"
+            f"{structure_text_from_numbers(m['motherboard'])}\n"
             f"活躍區段：{pack['hot_zone']}\n"
+            f"冷號補位：{m.get('cold_note', '無')}\n"
             f"高頻樣本：{'・'.join(pack['top_hot'].split()[:4])}\n\n"
+            "▍型態判斷\n"
+            f"{m.get('pattern_note', '')}\n\n"
             "▍策略解讀\n"
-            "Trend Model：\n"
-            "順應近期數據節奏，\n"
-            "作為今日主要參考模型\n\n"
-            "Adjustment Model：\n"
-            "考慮短期波動與冷門修正，\n"
-            "作為節奏轉換時的對沖模型\n\n"
+            "主軸號：偏穩定，適合抓2星。\n"
+            "3星主攻：主軸加延伸號，抓今日主要節奏。\n"
+            "4星爆發：加入冷號與型態補位，拚波動放大。\n\n"
             "▍AI陪跑語錄\n"
             f"{quote}\n\n"
             "（數據結構參考，非保證）"
@@ -893,12 +1279,199 @@ def format_today_companion():
     except Exception as e:
         print("FORMAT_TODAY_COMPANION ERROR:", repr(e))
         return (
-            "【今日AI陪跑】\n\n"
-            "▍Trend Model\n"
-            "06 09 18 24 33\n\n"
-            "▍Adjustment Model\n"
-            "04 12 18 26 31"
+            "【今日539 AI母盤】\n\n"
+            "核心母盤\n04 08 13 18 21 27 33 36 39\n\n"
+            "主軸號\n18 21 33"
         )
+
+
+# =========================
+# 539 智能點數配置
+# =========================
+def detect_market_state_for_bet():
+    """
+    依近30期539熱度集中度判斷盤勢。
+    抓不到資料時回傳 normal，避免影響 webhook。
+    """
+    try:
+        ensure_latest_539_in_db()
+        draws = load_539_draws(limit=30)
+
+        freq30 = {i: 0 for i in range(1, 40)}
+        for _, nums in draws:
+            for n in nums:
+                freq30[n] += 1
+
+        values = list(freq30.values())
+        avg = sum(values) / len(values) if values else 0
+        if avg <= 0:
+            return "normal"
+
+        high = sum(1 for v in values if v > avg * 1.3)
+        low = sum(1 for v in values if v < avg * 0.7)
+
+        if high >= 6:
+            return "stable"
+        elif low >= 10:
+            return "chaos"
+        else:
+            return "normal"
+    except Exception as e:
+        print("DETECT_MARKET_STATE_FOR_BET ERROR:", repr(e))
+        return "normal"
+
+
+def get_combo_by_state(state):
+    if state == "stable":
+        return 10, 10, 15, "集中盤｜縮盤提高精準度"
+    elif state == "chaos":
+        return 21, 20, 35, "混亂盤｜擴盤提高覆蓋率"
+    else:
+        return 15, 10, 15, "一般盤｜平衡配置"
+
+
+def build_bet_plan(total, mode="balanced"):
+    try:
+        total = int(total)
+    except Exception:
+        total = 3000
+
+    if total <= 0:
+        total = 3000
+
+    state = detect_market_state_for_bet()
+    c2, c3, c4, state_desc = get_combo_by_state(state)
+
+    modes = {
+        "safe": {
+            "name": "穩健模式",
+            "desc": "強化2星覆蓋率，穩定回補",
+            "p2": 0.55,
+            "p3": 0.35,
+            "p4": 0.10,
+        },
+        "balanced": {
+            "name": "均衡模式",
+            "desc": "2星穩定｜3星主攻｜4星爆發",
+            "p2": 0.45,
+            "p3": 0.40,
+            "p4": 0.15,
+        },
+        "burst": {
+            "name": "爆發模式",
+            "desc": "提高3星與4星攻擊性",
+            "p2": 0.35,
+            "p3": 0.45,
+            "p4": 0.20,
+        }
+    }
+
+    cfg = modes.get(mode, modes["balanced"])
+
+    amt2 = int(total * cfg["p2"])
+    amt3 = int(total * cfg["p3"])
+    amt4 = total - amt2 - amt3
+
+    odd2, odd3, odd4 = 70.44, 840, 12000
+
+    per2 = max(1, amt2 // c2)
+    per3 = max(1, amt3 // c3)
+    per4 = max(1, amt4 // c4)
+
+    real2 = per2 * c2
+    real3 = per3 * c3
+    real4 = per4 * c4
+    real_total = real2 + real3 + real4
+
+    win2 = int(per2 * odd2)
+    win3 = int(per3 * odd3)
+    win4 = int(per4 * odd4)
+
+    profit2 = win2 - real_total
+    profit3 = win3 - real_total
+    profit4 = win4 - real_total
+
+    def money(x):
+        return f"{int(x):,}"
+
+    return (
+        f"【539 智能點數配置｜{money(total)}點】\n\n"
+        f"模式：{cfg['name']}\n"
+        f"策略：{cfg['desc']}\n\n"
+
+        "▍今日盤勢判斷\n"
+        f"{state_desc}\n\n"
+
+        "▍碰數配置\n"
+        f"2星：{c2}碰\n"
+        f"3星：{c3}碰\n"
+        f"4星：{c4}碰\n\n"
+
+        "▍點數分配\n"
+        f"2星：每碰 {money(per2)}｜共 {money(real2)}\n"
+        f"3星：每碰 {money(per3)}｜共 {money(real3)}\n"
+        f"4星：每碰 {money(per4)}｜共 {money(real4)}\n\n"
+
+        f"實際投入：約 {money(real_total)} 點\n\n"
+
+        "━━━━━━━━━━━━━━━\n\n"
+
+        "▍命中試算\n"
+        f"中2星：約 {money(win2)}（損益 {money(profit2)}）\n"
+        f"中3星：約 {money(win3)}（損益 {money(profit3)}）\n"
+        f"中4星：約 {money(win4)}（損益 {money(profit4)}）\n\n"
+
+        "▍核心邏輯\n"
+        "2星：提高覆蓋率，撐住回補\n"
+        "3星：主要獲利來源\n"
+        "4星：小注拚高倍爆發\n\n"
+
+        "建議搭配「今日陪跑」使用。\n"
+        "（點數配置僅供策略參考）"
+    )
+
+
+def reply_bet_plan_menu(reply_token: str):
+    if not CHANNEL_ACCESS_TOKEN:
+        print("CHANNEL_ACCESS_TOKEN empty")
+        return
+
+    payload = {
+        "replyToken": reply_token,
+        "messages": [
+            {
+                "type": "template",
+                "altText": "539點數配置",
+                "template": {
+                    "type": "buttons",
+                    "title": "539 點數配置",
+                    "text": "請選擇配置模式",
+                    "actions": [
+                        {"type": "message", "label": "穩健1000", "text": "穩健 1000"},
+                        {"type": "message", "label": "均衡3000", "text": "均衡 3000"},
+                        {"type": "message", "label": "爆發5000", "text": "爆發 5000"},
+                        {"type": "message", "label": "爆發10000", "text": "爆發 10000"}
+                    ]
+                }
+            }
+        ]
+    }
+
+    try:
+        r = requests.post(
+            "https://api.line.me/v2/bot/message/reply",
+            headers={
+                "Authorization": f"Bearer {CHANNEL_ACCESS_TOKEN}",
+                "Content-Type": "application/json"
+            },
+            json=payload,
+            timeout=10
+        )
+        print("LINE BET MENU STATUS:", r.status_code)
+        if r.status_code >= 400:
+            print("LINE BET MENU BODY:", r.text[:500])
+    except Exception as e:
+        print("LINE BET MENU EXCEPTION:", repr(e))
 
 
 # =========================
@@ -1364,12 +1937,96 @@ def webhook():
                 if text == "賓果分析":
                     reply_bingo_menu(reply_token)
                     continue
+
+                if text in ("免費試用", "免費體驗", "試用一天", "免費使用1天", "免費使用一天"):
+                    exp_dt, status = start_free_trial(user_id, hours=24)
+                    if status == "already_member" and exp_dt:
+                        exp_tw = exp_dt.astimezone(TZ_TW)
+                        reply_message(
+                            reply_token,
+                            "✅ 你目前已經是會員\n\n"
+                            f"到期時間：{exp_tw.strftime('%Y-%m-%d %H:%M')}\n\n"
+                            "可直接輸入：今日陪跑 / 賓果分析"
+                        )
+                    elif status == "used":
+                        reply_message(
+                            reply_token,
+                            "你已使用過免費試用。\n\n"
+                            "若要繼續使用完整模型，請輸入：申請加入會員"
+                        )
+                    elif status == "opened" and exp_dt:
+                        exp_tw = exp_dt.astimezone(TZ_TW)
+                        reply_message(
+                            reply_token,
+                            "✅ 免費試用已開通\n\n"
+                            "可使用時間：24小時\n"
+                            f"到期時間：{exp_tw.strftime('%Y-%m-%d %H:%M')}\n\n"
+                            "可輸入：\n"
+                            "今日陪跑\n"
+                            "點數配置\n"
+                            "賓果分析\n"
+                            "預測分析\n\n"
+                            "提醒：數據模型僅供參考，請理性使用。"
+                        )
+                    else:
+                        reply_message(reply_token, "暫時無法開通試用，請稍後再試。")
+                    continue
+
+
+                if text == "點數配置":
+                    if not is_member(user_id):
+                        reply_message(reply_token, "🌿 點數配置屬於會員內容\n\n請先輸入：免費試用 或 遊戲帳號 XXXXX")
+                    else:
+                        reply_bet_plan_menu(reply_token)
+                    continue
+
+                if text.startswith(("穩健", "均衡", "爆發")):
+                    if not is_member(user_id):
+                        reply_message(reply_token, "🌿 點數配置屬於會員內容\n\n請先輸入：免費試用 或 遊戲帳號 XXXXX")
+                        continue
+                    try:
+                        parts = text.split()
+                        if len(parts) != 2:
+                            raise ValueError("bad format")
+                        mode_word = parts[0]
+                        amount = int(parts[1])
+
+                        mode_map = {
+                            "穩健": "safe",
+                            "均衡": "balanced",
+                            "爆發": "burst",
+                        }
+
+                        msg = build_bet_plan(amount, mode_map.get(mode_word, "balanced"))
+                        reply_message(reply_token, msg)
+                    except Exception as e:
+                        print("BET_PLAN_INPUT_ERROR:", repr(e))
+                        reply_message(reply_token, "格式錯誤\n例如：穩健 3000 / 均衡 3000 / 爆發 5000")
+                    continue
+
+                if text.startswith("下注"):
+                    if not is_member(user_id):
+                        reply_message(reply_token, "🌿 點數配置屬於會員內容\n\n請先輸入：免費試用 或 遊戲帳號 XXXXX")
+                        continue
+                    try:
+                        amount = int(text.replace("下注", "").strip())
+                        msg = build_bet_plan(amount, "balanced")
+                        reply_message(reply_token, msg)
+                    except Exception as e:
+                        print("BET_PLAN_CUSTOM_ERROR:", repr(e))
+                        reply_message(reply_token, "格式錯誤\n例如：下注 3000")
+                    continue
+
                 if text in ("指令", "help", "HELP"):
                     reply_message(
                         reply_token,
                         "【功能選單】\n\n"
                         "今日陪跑\n"
                         "查看539 AI模型\n\n"
+                        "免費試用\n"
+                        "免費體驗24小時（每人一次）\n\n"
+                        "點數配置\n"
+                        "539 2星/3星/4星智能配置\n\n"
                         "賓果分析\n"
                         "查看賓果模型\n\n"
                         "賓果1期分析\n"
