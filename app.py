@@ -1331,6 +1331,12 @@ def get_combo_by_state(state):
 
 
 def build_bet_plan(total, mode="balanced"):
+    """
+    539 點數配置：
+    - 直接引用今日陪跑號碼
+    - 顯示 2/3/4 星要選幾顆、共幾碰
+    - 不展開全部組合，避免畫面太亂
+    """
     try:
         total = int(total)
     except Exception:
@@ -1339,40 +1345,92 @@ def build_bet_plan(total, mode="balanced"):
     if total <= 0:
         total = 3000
 
-    state = detect_market_state_for_bet()
-    c2, c3, c4, state_desc = get_combo_by_state(state)
-
     modes = {
         "safe": {
             "name": "穩健模式",
-            "desc": "強化2星覆蓋率，穩定回補",
-            "p2": 0.55,
-            "p3": 0.35,
-            "p4": 0.10,
-        },
-        "balanced": {
-            "name": "均衡模式",
-            "desc": "2星穩定｜3星主攻｜4星爆發",
+            "desc": "2星回補為主｜3星主攻｜4星小注爆發",
             "p2": 0.45,
             "p3": 0.40,
             "p4": 0.15,
         },
+        "balanced": {
+            "name": "均衡模式",
+            "desc": "2星回補｜3星主攻｜4星爆發",
+            "p2": 0.30,
+            "p3": 0.50,
+            "p4": 0.20,
+        },
         "burst": {
             "name": "爆發模式",
-            "desc": "提高3星與4星攻擊性",
-            "p2": 0.35,
-            "p3": 0.45,
-            "p4": 0.20,
+            "desc": "降低2星配置，提高3星與4星攻擊",
+            "p2": 0.20,
+            "p3": 0.50,
+            "p4": 0.30,
         }
     }
-
     cfg = modes.get(mode, modes["balanced"])
+
+    def money(x):
+        return f"{int(x):,}"
+
+    def nums_from_text(text, limit=None):
+        out = []
+        for part in (text or "").split():
+            try:
+                n = int(part)
+                if 1 <= n <= 39 and n not in out:
+                    out.append(n)
+            except Exception:
+                pass
+        return out[:limit] if limit else out
+
+    def fmt_nums(nums):
+        return " ".join([f"{n:02d}" for n in nums])
+
+    try:
+        pack = get_or_build_today_pick_539()
+        m = parse_models_from_note(pack.get("note", ""))
+        two_nums = nums_from_text(m.get("stable2", ""), 3)
+        three_nums = nums_from_text(m.get("attack3", ""), 5)
+        four_nums = nums_from_text(m.get("burst4", ""), 6)
+
+        # 防呆：若舊快取或資料異常，從母盤補齊
+        mother = nums_from_text(m.get("motherboard", ""))
+        for n in mother:
+            if len(two_nums) < 3 and n not in two_nums:
+                two_nums.append(n)
+            if len(three_nums) < 5 and n not in three_nums:
+                three_nums.append(n)
+            if len(four_nums) < 6 and n not in four_nums:
+                four_nums.append(n)
+
+        # 最後防呆，避免任何情況下不足顆數
+        for n in range(1, 40):
+            if len(two_nums) < 3 and n not in two_nums:
+                two_nums.append(n)
+            if len(three_nums) < 5 and n not in three_nums:
+                three_nums.append(n)
+            if len(four_nums) < 6 and n not in four_nums:
+                four_nums.append(n)
+            if len(two_nums) >= 3 and len(three_nums) >= 5 and len(four_nums) >= 6:
+                break
+
+        two_nums = sorted(two_nums[:3])
+        three_nums = sorted(three_nums[:5])
+        four_nums = sorted(four_nums[:6])
+    except Exception as e:
+        print("BUILD_BET_PLAN_NUMBERS_ERROR:", repr(e))
+        two_nums = [18, 21, 33]
+        three_nums = [8, 18, 21, 33, 36]
+        four_nums = [4, 8, 18, 21, 27, 33]
+
+    # 固定顆數 / 碰數，與今日陪跑對齊
+    c2, c3, c4 = 3, 10, 15
+    odd2, odd3, odd4 = 70.44, 840, 12000
 
     amt2 = int(total * cfg["p2"])
     amt3 = int(total * cfg["p3"])
     amt4 = total - amt2 - amt3
-
-    odd2, odd3, odd4 = 70.44, 840, 12000
 
     per2 = max(1, amt2 // c2)
     per3 = max(1, amt3 // c3)
@@ -1387,49 +1445,56 @@ def build_bet_plan(total, mode="balanced"):
     win3 = int(per3 * odd3)
     win4 = int(per4 * odd4)
 
-    profit2 = win2 - real_total
-    profit3 = win3 - real_total
-    profit4 = win4 - real_total
-
-    def money(x):
-        return f"{int(x):,}"
+    two_combo_text = (
+        f"{two_nums[0]:02d}-{two_nums[1]:02d}\n"
+        f"{two_nums[0]:02d}-{two_nums[2]:02d}\n"
+        f"{two_nums[1]:02d}-{two_nums[2]:02d}"
+    )
 
     return (
-        f"【539 智能點數配置｜{money(total)}點】\n\n"
+        f"【539 點數配置｜{money(total)}點】\n\n"
         f"模式：{cfg['name']}\n"
         f"策略：{cfg['desc']}\n\n"
 
-        "▍今日盤勢判斷\n"
-        f"{state_desc}\n\n"
+        "▍使用號碼（直接照下）\n\n"
 
-        "▍碰數配置\n"
-        f"2星：{c2}碰\n"
-        f"3星：{c3}碰\n"
-        f"4星：{c4}碰\n\n"
+        f"2星：{fmt_nums(two_nums)}\n"
+        "👉 選3顆，全碰\n"
+        f"{two_combo_text}\n"
+        "共3碰\n\n"
 
-        "▍點數分配\n"
-        f"2星：每碰 {money(per2)}｜共 {money(real2)}\n"
-        f"3星：每碰 {money(per3)}｜共 {money(real3)}\n"
-        f"4星：每碰 {money(per4)}｜共 {money(real4)}\n\n"
+        f"3星：{fmt_nums(three_nums)}\n"
+        "👉 任選3顆組合，共10碰\n\n"
+
+        f"4星：{fmt_nums(four_nums)}\n"
+        "👉 任選4顆組合，共15碰\n\n"
+
+        "━━━━━━━━━━━━━━━\n\n"
+
+        "▍點數分配\n\n"
+        f"2星：每碰 {money(per2)} × 3碰 = {money(real2)}\n"
+        f"3星：每碰 {money(per3)} × 10碰 = {money(real3)}\n"
+        f"4星：每碰 {money(per4)} × 15碰 = {money(real4)}\n\n"
 
         f"實際投入：約 {money(real_total)} 點\n\n"
 
         "━━━━━━━━━━━━━━━\n\n"
 
-        "▍命中試算\n"
-        f"中2星：約 {money(win2)}（損益 {money(profit2)}）\n"
-        f"中3星：約 {money(win3)}（損益 {money(profit3)}）\n"
-        f"中4星：約 {money(win4)}（損益 {money(profit4)}）\n\n"
+        "▍命中試算\n\n"
+        f"中2星：約 {money(win2)}\n"
+        f"中3星：約 {money(win3)}\n"
+        f"中4星：約 {money(win4)}\n\n"
 
-        "▍核心邏輯\n"
-        "2星：提高覆蓋率，撐住回補\n"
-        "3星：主要獲利來源\n"
-        "4星：小注拚高倍爆發\n\n"
+        "━━━━━━━━━━━━━━━\n\n"
 
-        "建議搭配「今日陪跑」使用。\n"
+        "▍下注說明\n\n"
+        "系統已幫你整理顆數與碰數。\n"
+        "直接用上方號碼照星級全碰即可。\n\n"
+        "2星看主軸號\n"
+        "3星看主攻盤\n"
+        "4星看爆發盤\n\n"
         "（點數配置僅供策略參考）"
     )
-
 
 def reply_bet_plan_menu(reply_token: str):
     if not CHANNEL_ACCESS_TOKEN:
