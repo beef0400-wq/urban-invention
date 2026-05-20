@@ -8,6 +8,7 @@ import hashlib
 import hmac
 import re
 from datetime import datetime, timedelta, timezone, date
+from contextlib import contextmanager
 import psycopg2
 
 app = Flask(__name__)
@@ -19,10 +20,15 @@ ADMIN_SECRET = os.getenv("ADMIN_SECRET", "1234").strip()
 CRON_SECRET = os.getenv("CRON_SECRET", "push8899").strip()
 DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
 
-TZ_TW = timezone(timedelta(hours=8))
+# 可選：如果你以後想用管理員白名單，只要在環境變數加 ADMIN_USER_IDS=Uxxxx,Uyyyy
+# 沒設定也沒關係，舊的密碼管理方式仍可用。
+ADMIN_USER_IDS = [x.strip() for x in os.getenv("ADMIN_USER_IDS", "").split(",") if x.strip()]
 
-# ========= 資料來源 =========
+TZ_TW = timezone(timedelta(hours=8))
 SOURCE_539_URL = "https://www.pilio.idv.tw/lto539/list539BIG.asp"
+
+HTTP = requests.Session()
+_DB_READY = False
 
 # =========================
 # 每日陪跑語錄
@@ -61,10 +67,21 @@ QUOTES = [
 ]
 
 
+def now_tw():
+    return datetime.now(TZ_TW)
+
+
+def today_tw():
+    return now_tw().date()
+
+
 def get_daily_quote():
-    today = datetime.now(TZ_TW).date()
-    idx = today.toordinal() % len(QUOTES)
+    idx = today_tw().toordinal() % len(QUOTES)
     return QUOTES[idx]
+
+
+def log(*args):
+    print(*args, flush=True)
 
 
 # =========================
@@ -81,245 +98,299 @@ def verify_line_signature(raw_body: bytes, signature: str) -> bool:
 # =========================
 # Postgres
 # =========================
-def get_conn():
+@contextmanager
+def db_cursor(commit=False):
     if not DATABASE_URL:
         raise RuntimeError("DATABASE_URL 未設定")
-    return psycopg2.connect(DATABASE_URL, sslmode="require")
+    conn = psycopg2.connect(DATABASE_URL, sslmode="require")
+    cur = conn.cursor()
+    try:
+        yield cur
+        if commit:
+            conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        cur.close()
+        conn.close()
 
 
 def init_db():
-    conn = get_conn()
-    cur = conn.cursor()
-
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS members (
-            user_id TEXT PRIMARY KEY,
-            expires_at TIMESTAMPTZ NOT NULL
-        );
-    """)
-
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS free_trials (
-            user_id TEXT PRIMARY KEY,
-            started_at TIMESTAMPTZ NOT NULL,
-            expires_at TIMESTAMPTZ NOT NULL
-        );
-    """)
-
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS pending_accounts (
-            game_account TEXT PRIMARY KEY,
-            user_id TEXT NOT NULL,
-            created_at TIMESTAMPTZ NOT NULL
-        );
-    """)
-
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS prediction_subscribers (
-            user_id TEXT PRIMARY KEY,
-            enabled BOOLEAN NOT NULL DEFAULT TRUE,
-            updated_at TIMESTAMPTZ NOT NULL
-        );
-    """)
-
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS daily_push_subscribers (
-            user_id TEXT PRIMARY KEY,
-            enabled BOOLEAN NOT NULL DEFAULT TRUE,
-            updated_at TIMESTAMPTZ NOT NULL
-        );
-    """)
-
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS lotto_539_draws (
-            draw_date DATE PRIMARY KEY,
-            numbers TEXT NOT NULL
-        );
-    """)
-
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS daily_pick_cache (
-            pick_date DATE PRIMARY KEY,
-            numbers TEXT NOT NULL,
-            hot_zone TEXT NOT NULL,
-            top_hot TEXT NOT NULL,
-            note TEXT NOT NULL,
-            created_at TIMESTAMPTZ NOT NULL
-        );
-    """)
-
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS push_state (
-            push_key TEXT PRIMARY KEY,
-            last_value TEXT,
-            updated_at TIMESTAMPTZ NOT NULL
-        );
-    """)
-
-    # 舊版相容
-    cur.execute("""
-        ALTER TABLE push_state
-        ADD COLUMN IF NOT EXISTS last_value TEXT;
-    """)
-    cur.execute("""
-        ALTER TABLE push_state
-        ADD COLUMN IF NOT EXISTS last_bucket TEXT;
-    """)
-    cur.execute("""
-        UPDATE push_state
-        SET last_value = COALESCE(last_value, last_bucket)
-        WHERE last_value IS NULL;
-    """)
-
-    try:
+    with db_cursor(commit=True) as cur:
         cur.execute("""
-            ALTER TABLE push_state
-            ALTER COLUMN last_bucket DROP NOT NULL;
+            CREATE TABLE IF NOT EXISTS members (
+                user_id TEXT PRIMARY KEY,
+                expires_at TIMESTAMPTZ NOT NULL
+            );
         """)
-    except Exception as e:
-        print("ALTER last_bucket DROP NOT NULL skipped:", repr(e))
-        conn.rollback()
-        cur = conn.cursor()
 
-    conn.commit()
-    cur.close()
-    conn.close()
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS free_trials (
+                user_id TEXT PRIMARY KEY,
+                started_at TIMESTAMPTZ NOT NULL,
+                expires_at TIMESTAMPTZ NOT NULL
+            );
+        """)
+
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS pending_accounts (
+                game_account TEXT PRIMARY KEY,
+                user_id TEXT NOT NULL,
+                created_at TIMESTAMPTZ NOT NULL
+            );
+        """)
+
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS prediction_subscribers (
+                user_id TEXT PRIMARY KEY,
+                enabled BOOLEAN NOT NULL DEFAULT TRUE,
+                updated_at TIMESTAMPTZ NOT NULL
+            );
+        """)
+
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS daily_push_subscribers (
+                user_id TEXT PRIMARY KEY,
+                enabled BOOLEAN NOT NULL DEFAULT TRUE,
+                updated_at TIMESTAMPTZ NOT NULL
+            );
+        """)
+
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS lotto_539_draws (
+                draw_date DATE PRIMARY KEY,
+                numbers TEXT NOT NULL
+            );
+        """)
+
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS daily_pick_cache (
+                pick_date DATE PRIMARY KEY,
+                numbers TEXT NOT NULL,
+                hot_zone TEXT NOT NULL,
+                top_hot TEXT NOT NULL,
+                note TEXT NOT NULL,
+                created_at TIMESTAMPTZ NOT NULL
+            );
+        """)
+
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS push_state (
+                push_key TEXT PRIMARY KEY,
+                last_value TEXT,
+                updated_at TIMESTAMPTZ NOT NULL
+            );
+        """)
+
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS model_results (
+                result_date DATE PRIMARY KEY,
+                motherboard TEXT NOT NULL,
+                actual_numbers TEXT,
+                hit_count INTEGER,
+                created_at TIMESTAMPTZ NOT NULL
+            );
+        """)
+
+        cur.execute("ALTER TABLE push_state ADD COLUMN IF NOT EXISTS last_value TEXT;")
+        cur.execute("ALTER TABLE push_state ADD COLUMN IF NOT EXISTS last_bucket TEXT;")
+        cur.execute("""
+            UPDATE push_state
+            SET last_value = COALESCE(last_value, last_bucket)
+            WHERE last_value IS NULL;
+        """)
+
+
+def ensure_db_ready():
+    global _DB_READY
+    if _DB_READY:
+        return
+    init_db()
+    _DB_READY = True
 
 
 # =========================
 # LINE Reply / Push
 # =========================
-def reply_message(reply_token: str, text: str):
-    if not CHANNEL_ACCESS_TOKEN:
-        print("CHANNEL_ACCESS_TOKEN empty")
-        return
-
-    url = "https://api.line.me/v2/bot/message/reply"
-    headers = {
+def line_headers():
+    return {
         "Content-Type": "application/json",
         "Authorization": f"Bearer {CHANNEL_ACCESS_TOKEN}",
     }
+
+
+def reply_message(reply_token: str, text: str):
+    if not CHANNEL_ACCESS_TOKEN:
+        log("CHANNEL_ACCESS_TOKEN empty")
+        return
+
     payload = {
         "replyToken": reply_token,
-        "messages": [{"type": "text", "text": text}]
+        "messages": [{"type": "text", "text": str(text)[:5000]}]
     }
 
     try:
-        r = requests.post(url, headers=headers, data=json.dumps(payload), timeout=10)
-        print("LINE REPLY STATUS:", r.status_code)
+        r = HTTP.post(
+            "https://api.line.me/v2/bot/message/reply",
+            headers=line_headers(),
+            json=payload,
+            timeout=10
+        )
+        log("LINE REPLY STATUS:", r.status_code)
         if r.status_code >= 400:
-            print("LINE REPLY BODY:", r.text[:500])
+            log("LINE REPLY BODY:", r.text[:500])
     except Exception as e:
-        print("LINE REPLY EXCEPTION:", repr(e))
-def reply_bingo_menu(reply_token: str):
-    if not CHANNEL_ACCESS_TOKEN:
-        print("CHANNEL_ACCESS_TOKEN empty")
-        return
+        log("LINE REPLY EXCEPTION:", repr(e))
 
-    url = "https://api.line.me/v2/bot/message/reply"
-    headers = {
-        "Content-Type": "application/json",
-        "Authorization": f"Bearer {CHANNEL_ACCESS_TOKEN}",
-    }
+
+def reply_template(reply_token: str, alt_text: str, title: str, text: str, actions):
+    if not CHANNEL_ACCESS_TOKEN:
+        log("CHANNEL_ACCESS_TOKEN empty")
+        return
 
     payload = {
         "replyToken": reply_token,
         "messages": [
             {
                 "type": "template",
-                "altText": "Bingo分析選單",
+                "altText": alt_text,
                 "template": {
                     "type": "buttons",
-                    "title": "Bingo 分析",
-                    "text": "請選擇期數",
-                    "actions": [
-                        {"type": "message", "label": "1期", "text": "1期"},
-                        {"type": "message", "label": "5期", "text": "5期"},
-                        {"type": "message", "label": "10期", "text": "10期"}
-                    ]
+                    "title": title[:40],
+                    "text": text[:60],
+                    "actions": actions[:4]
                 }
             }
         ]
     }
 
     try:
-        r = requests.post(url, headers=headers, data=json.dumps(payload), timeout=10)
-        print("LINE BUTTON REPLY STATUS:", r.status_code)
+        r = HTTP.post(
+            "https://api.line.me/v2/bot/message/reply",
+            headers=line_headers(),
+            json=payload,
+            timeout=10
+        )
+        log("LINE TEMPLATE STATUS:", r.status_code)
         if r.status_code >= 400:
-            print("LINE BUTTON REPLY BODY:", r.text[:500])
+            log("LINE TEMPLATE BODY:", r.text[:500])
     except Exception as e:
-        print("LINE BUTTON REPLY EXCEPTION:", repr(e))
+        log("LINE TEMPLATE EXCEPTION:", repr(e))
+
+
+def reply_bingo_menu(reply_token: str):
+    reply_template(
+        reply_token,
+        "Bingo分析選單",
+        "Bingo 分析",
+        "請選擇期數",
+        [
+            {"type": "message", "label": "1期", "text": "1期"},
+            {"type": "message", "label": "5期", "text": "5期"},
+            {"type": "message", "label": "10期", "text": "10期"}
+        ]
+    )
+
+
+def reply_bet_plan_menu(reply_token: str):
+    reply_template(
+        reply_token,
+        "539點數配置",
+        "539 點數配置",
+        "請選擇配置模式",
+        [
+            {"type": "message", "label": "穩健1000", "text": "穩健 1000"},
+            {"type": "message", "label": "均衡3000", "text": "均衡 3000"},
+            {"type": "message", "label": "爆發5000", "text": "爆發 5000"},
+            {"type": "message", "label": "爆發10000", "text": "爆發 10000"}
+        ]
+    )
 
 
 def push_message(user_id: str, text: str) -> bool:
     if not CHANNEL_ACCESS_TOKEN:
-        print("CHANNEL_ACCESS_TOKEN empty")
+        log("CHANNEL_ACCESS_TOKEN empty")
         return False
 
-    url = "https://api.line.me/v2/bot/message/push"
-    headers = {
-        "Content-Type": "application/json",
-        "Authorization": f"Bearer {CHANNEL_ACCESS_TOKEN}",
-    }
-    payload = {"to": user_id, "messages": [{"type": "text", "text": text}]}
+    payload = {"to": user_id, "messages": [{"type": "text", "text": str(text)[:5000]}]}
 
     try:
-        r = requests.post(url, headers=headers, data=json.dumps(payload), timeout=10)
-        print("LINE PUSH STATUS:", r.status_code, "TO:", user_id)
+        r = HTTP.post(
+            "https://api.line.me/v2/bot/message/push",
+            headers=line_headers(),
+            json=payload,
+            timeout=10
+        )
+        log("LINE PUSH STATUS:", r.status_code, "TO:", user_id)
         if r.status_code >= 400:
-            print("LINE PUSH BODY:", r.text[:500])
+            log("LINE PUSH BODY:", r.text[:500])
             return False
         return True
     except Exception as e:
-        print("LINE PUSH EXCEPTION:", repr(e))
+        log("LINE PUSH EXCEPTION:", repr(e))
         return False
+
+
+# =========================
+# 管理員判斷
+# =========================
+def is_admin_user(user_id: str):
+    return bool(user_id and ADMIN_USER_IDS and user_id in ADMIN_USER_IDS)
+
+
+def admin_ok(user_id: str, secret: str = ""):
+    # 有設定 ADMIN_USER_IDS 時，白名單直接通過。
+    # 沒設定時，沿用舊密碼方式，不需要你改其他東西。
+    if is_admin_user(user_id):
+        return True
+    return secret == ADMIN_SECRET
 
 
 # =========================
 # 會員系統
 # =========================
 def set_expiry_plus_days(user_id: str, days: int = 30):
-    now_tw = datetime.now(TZ_TW)
-    target_date = (now_tw + timedelta(days=days)).date()
+    target_date = (now_tw() + timedelta(days=days)).date()
     dt_tw = datetime.strptime(target_date.strftime("%Y-%m-%d"), "%Y-%m-%d").replace(
         hour=23, minute=59, second=59, tzinfo=TZ_TW
     )
 
-    conn = get_conn()
-    cur = conn.cursor()
-    cur.execute("""
-        INSERT INTO members (user_id, expires_at)
-        VALUES (%s, %s)
-        ON CONFLICT (user_id) DO UPDATE SET expires_at = EXCLUDED.expires_at;
-    """, (user_id, dt_tw))
-    conn.commit()
-    cur.close()
-    conn.close()
+    with db_cursor(commit=True) as cur:
+        cur.execute("""
+            INSERT INTO members (user_id, expires_at)
+            VALUES (%s, %s)
+            ON CONFLICT (user_id) DO UPDATE SET expires_at = EXCLUDED.expires_at;
+        """, (user_id, dt_tw))
     return dt_tw
 
 
 def get_expiry(user_id: str):
-    conn = get_conn()
-    cur = conn.cursor()
-    cur.execute("SELECT expires_at FROM members WHERE user_id = %s;", (user_id,))
-    row = cur.fetchone()
-    cur.close()
-    conn.close()
+    with db_cursor() as cur:
+        cur.execute("SELECT expires_at FROM members WHERE user_id = %s;", (user_id,))
+        row = cur.fetchone()
     return row[0] if row else None
 
 
+def is_member(user_id: str) -> bool:
+    try:
+        exp = get_expiry(user_id)
+        if not exp:
+            return False
+        return exp.astimezone(TZ_TW) > now_tw()
+    except Exception as e:
+        log("IS_MEMBER ERROR:", repr(e))
+        return False
+
+
 def has_used_free_trial(user_id: str) -> bool:
-    conn = get_conn()
-    cur = conn.cursor()
-    cur.execute("SELECT 1 FROM free_trials WHERE user_id = %s;", (user_id,))
-    row = cur.fetchone()
-    cur.close()
-    conn.close()
+    with db_cursor() as cur:
+        cur.execute("SELECT 1 FROM free_trials WHERE user_id = %s;", (user_id,))
+        row = cur.fetchone()
     return row is not None
 
 
 def start_free_trial(user_id: str, hours: int = 24):
-    """開通一次性免費試用。已開通會員或已試用者不重複開通。"""
     if not user_id:
         return None, "no_user"
 
@@ -329,81 +400,54 @@ def start_free_trial(user_id: str, hours: int = 24):
     if has_used_free_trial(user_id):
         return None, "used"
 
-    now_tw = datetime.now(TZ_TW)
-    exp_tw = now_tw + timedelta(hours=hours)
+    start = now_tw()
+    exp = start + timedelta(hours=hours)
 
-    conn = get_conn()
-    cur = conn.cursor()
-    try:
+    with db_cursor(commit=True) as cur:
         cur.execute("""
             INSERT INTO members (user_id, expires_at)
             VALUES (%s, %s)
             ON CONFLICT (user_id) DO UPDATE SET expires_at = EXCLUDED.expires_at;
-        """, (user_id, exp_tw))
+        """, (user_id, exp))
 
         cur.execute("""
             INSERT INTO free_trials (user_id, started_at, expires_at)
             VALUES (%s, %s, %s)
             ON CONFLICT (user_id) DO NOTHING;
-        """, (user_id, now_tw, exp_tw))
+        """, (user_id, start, exp))
 
         cur.execute("""
             INSERT INTO daily_push_subscribers (user_id, enabled, updated_at)
             VALUES (%s, TRUE, %s)
             ON CONFLICT (user_id)
             DO UPDATE SET enabled = TRUE, updated_at = EXCLUDED.updated_at;
-        """, (user_id, now_tw))
+        """, (user_id, start))
 
-        conn.commit()
-    except Exception:
-        conn.rollback()
-        raise
-    finally:
-        cur.close()
-        conn.close()
-
-    return exp_tw, "opened"
+    return exp, "opened"
 
 
-def is_member(user_id: str) -> bool:
-    try:
-        exp = get_expiry(user_id)
-        if not exp:
-            return False
-        now_tw = datetime.now(TZ_TW)
-        exp_tw = exp.astimezone(TZ_TW)
-        return exp_tw > now_tw
-    except Exception as e:
-        print("IS_MEMBER ERROR:", repr(e))
-        return False
-
-
-def get_active_member_ids():
-    conn = get_conn()
-    cur = conn.cursor()
-    now_tw = datetime.now(TZ_TW)
-    cur.execute("SELECT user_id FROM members WHERE expires_at > %s;", (now_tw,))
-    rows = cur.fetchall()
-    cur.close()
-    conn.close()
+def get_daily_push_users():
+    with db_cursor() as cur:
+        cur.execute("""
+            SELECT m.user_id
+            FROM members m
+            LEFT JOIN daily_push_subscribers d ON m.user_id = d.user_id
+            WHERE m.expires_at > %s
+              AND COALESCE(d.enabled, TRUE) = TRUE;
+        """, (now_tw(),))
+        rows = cur.fetchall()
     return [r[0] for r in rows]
 
 
 def get_expiring_members(days_before=3):
-    conn = get_conn()
-    cur = conn.cursor()
-
-    today = datetime.now(TZ_TW).date()
-    target_date = today + timedelta(days=days_before)
-
-    cur.execute("""
-        SELECT user_id, expires_at
-        FROM members
-        WHERE (expires_at AT TIME ZONE 'Asia/Taipei')::date = %s;
-    """, (target_date,))
-    rows = cur.fetchall()
-    cur.close()
-    conn.close()
+    target_date = today_tw() + timedelta(days=days_before)
+    with db_cursor() as cur:
+        cur.execute("""
+            SELECT user_id, expires_at
+            FROM members
+            WHERE (expires_at AT TIME ZONE 'Asia/Taipei')::date = %s;
+        """, (target_date,))
+        rows = cur.fetchall()
     return rows
 
 
@@ -411,50 +455,36 @@ def get_expiring_members(days_before=3):
 # 待確認帳號
 # =========================
 def save_pending_account(game_account: str, user_id: str):
-    created_at = datetime.now(TZ_TW)
-    conn = get_conn()
-    cur = conn.cursor()
-    cur.execute("""
-        INSERT INTO pending_accounts (game_account, user_id, created_at)
-        VALUES (%s, %s, %s)
-        ON CONFLICT (game_account) DO UPDATE
-        SET user_id = EXCLUDED.user_id,
-            created_at = EXCLUDED.created_at;
-    """, (game_account, user_id, created_at))
-    conn.commit()
-    cur.close()
-    conn.close()
+    with db_cursor(commit=True) as cur:
+        cur.execute("""
+            INSERT INTO pending_accounts (game_account, user_id, created_at)
+            VALUES (%s, %s, %s)
+            ON CONFLICT (game_account) DO UPDATE
+            SET user_id = EXCLUDED.user_id,
+                created_at = EXCLUDED.created_at;
+        """, (game_account, user_id, now_tw()))
 
 
 def pop_pending_user_id(game_account: str):
-    conn = get_conn()
-    cur = conn.cursor()
-    cur.execute("SELECT user_id FROM pending_accounts WHERE game_account = %s;", (game_account,))
-    row = cur.fetchone()
-    if not row:
-        cur.close()
-        conn.close()
-        return None
-    user_id = row[0]
-    cur.execute("DELETE FROM pending_accounts WHERE game_account = %s;", (game_account,))
-    conn.commit()
-    cur.close()
-    conn.close()
+    with db_cursor(commit=True) as cur:
+        cur.execute("SELECT user_id FROM pending_accounts WHERE game_account = %s;", (game_account,))
+        row = cur.fetchone()
+        if not row:
+            return None
+        user_id = row[0]
+        cur.execute("DELETE FROM pending_accounts WHERE game_account = %s;", (game_account,))
     return user_id
 
 
 def get_latest_pending(limit=50):
-    conn = get_conn()
-    cur = conn.cursor()
-    cur.execute("""
-        SELECT game_account, user_id, created_at
-        FROM pending_accounts
-        ORDER BY created_at DESC
-        LIMIT %s;
-    """, (limit,))
-    rows = cur.fetchall()
-    cur.close()
-    conn.close()
+    with db_cursor() as cur:
+        cur.execute("""
+            SELECT game_account, user_id, created_at
+            FROM pending_accounts
+            ORDER BY created_at DESC
+            LIMIT %s;
+        """, (limit,))
+        rows = cur.fetchall()
     return rows
 
 
@@ -462,130 +492,85 @@ def get_latest_pending(limit=50):
 # 訂閱控制
 # =========================
 def enable_prediction(user_id: str):
-    conn = get_conn()
-    cur = conn.cursor()
-    cur.execute("""
-        INSERT INTO prediction_subscribers (user_id, enabled, updated_at)
-        VALUES (%s, TRUE, %s)
-        ON CONFLICT (user_id) DO UPDATE
-        SET enabled = TRUE,
-            updated_at = EXCLUDED.updated_at;
-    """, (user_id, datetime.now(TZ_TW)))
-    conn.commit()
-    cur.close()
-    conn.close()
+    with db_cursor(commit=True) as cur:
+        cur.execute("""
+            INSERT INTO prediction_subscribers (user_id, enabled, updated_at)
+            VALUES (%s, TRUE, %s)
+            ON CONFLICT (user_id) DO UPDATE
+            SET enabled = TRUE, updated_at = EXCLUDED.updated_at;
+        """, (user_id, now_tw()))
 
 
 def disable_prediction(user_id: str):
-    conn = get_conn()
-    cur = conn.cursor()
-    cur.execute("""
-        INSERT INTO prediction_subscribers (user_id, enabled, updated_at)
-        VALUES (%s, FALSE, %s)
-        ON CONFLICT (user_id) DO UPDATE
-        SET enabled = FALSE,
-            updated_at = EXCLUDED.updated_at;
-    """, (user_id, datetime.now(TZ_TW)))
-    conn.commit()
-    cur.close()
-    conn.close()
+    with db_cursor(commit=True) as cur:
+        cur.execute("""
+            INSERT INTO prediction_subscribers (user_id, enabled, updated_at)
+            VALUES (%s, FALSE, %s)
+            ON CONFLICT (user_id) DO UPDATE
+            SET enabled = FALSE, updated_at = EXCLUDED.updated_at;
+        """, (user_id, now_tw()))
 
 
 def get_prediction_subscribers():
-    conn = get_conn()
-    cur = conn.cursor()
-    cur.execute("""
-        SELECT p.user_id
-        FROM prediction_subscribers p
-        JOIN members m ON p.user_id = m.user_id
-        WHERE p.enabled = TRUE
-          AND m.expires_at > %s;
-    """, (datetime.now(TZ_TW),))
-    rows = cur.fetchall()
-    cur.close()
-    conn.close()
+    with db_cursor() as cur:
+        cur.execute("""
+            SELECT p.user_id
+            FROM prediction_subscribers p
+            JOIN members m ON p.user_id = m.user_id
+            WHERE p.enabled = TRUE
+              AND m.expires_at > %s;
+        """, (now_tw(),))
+        rows = cur.fetchall()
     return [r[0] for r in rows]
 
 
 def enable_daily_push(user_id: str):
-    conn = get_conn()
-    cur = conn.cursor()
-    cur.execute("""
-        INSERT INTO daily_push_subscribers (user_id, enabled, updated_at)
-        VALUES (%s, TRUE, %s)
-        ON CONFLICT (user_id)
-        DO UPDATE SET enabled = TRUE, updated_at = EXCLUDED.updated_at;
-    """, (user_id, datetime.now(TZ_TW)))
-    conn.commit()
-    cur.close()
-    conn.close()
+    with db_cursor(commit=True) as cur:
+        cur.execute("""
+            INSERT INTO daily_push_subscribers (user_id, enabled, updated_at)
+            VALUES (%s, TRUE, %s)
+            ON CONFLICT (user_id)
+            DO UPDATE SET enabled = TRUE, updated_at = EXCLUDED.updated_at;
+        """, (user_id, now_tw()))
 
 
 def disable_daily_push(user_id: str):
-    conn = get_conn()
-    cur = conn.cursor()
-    cur.execute("""
-        INSERT INTO daily_push_subscribers (user_id, enabled, updated_at)
-        VALUES (%s, FALSE, %s)
-        ON CONFLICT (user_id)
-        DO UPDATE SET enabled = FALSE, updated_at = EXCLUDED.updated_at;
-    """, (user_id, datetime.now(TZ_TW)))
-    conn.commit()
-    cur.close()
-    conn.close()
-
-
-def get_daily_push_users():
-    # 舊會員如果尚未建立 daily_push_subscribers，視為預設開啟
-    conn = get_conn()
-    cur = conn.cursor()
-    cur.execute("""
-        SELECT m.user_id
-        FROM members m
-        LEFT JOIN daily_push_subscribers d ON m.user_id = d.user_id
-        WHERE m.expires_at > %s
-          AND COALESCE(d.enabled, TRUE) = TRUE;
-    """, (datetime.now(TZ_TW),))
-    rows = cur.fetchall()
-    cur.close()
-    conn.close()
-    return [r[0] for r in rows]
+    with db_cursor(commit=True) as cur:
+        cur.execute("""
+            INSERT INTO daily_push_subscribers (user_id, enabled, updated_at)
+            VALUES (%s, FALSE, %s)
+            ON CONFLICT (user_id)
+            DO UPDATE SET enabled = FALSE, updated_at = EXCLUDED.updated_at;
+        """, (user_id, now_tw()))
 
 
 # =========================
 # push state
 # =========================
 def get_push_state(push_key: str):
-    conn = get_conn()
-    cur = conn.cursor()
-    cur.execute("SELECT last_value FROM push_state WHERE push_key = %s;", (push_key,))
-    row = cur.fetchone()
-    cur.close()
-    conn.close()
+    with db_cursor() as cur:
+        cur.execute("SELECT last_value FROM push_state WHERE push_key = %s;", (push_key,))
+        row = cur.fetchone()
     return row[0] if row else None
 
 
 def set_push_state(push_key: str, last_value: str):
-    conn = get_conn()
-    cur = conn.cursor()
-    cur.execute("""
-        INSERT INTO push_state (push_key, last_value, last_bucket, updated_at)
-        VALUES (%s, %s, %s, %s)
-        ON CONFLICT (push_key) DO UPDATE
-        SET last_value = EXCLUDED.last_value,
-            last_bucket = EXCLUDED.last_bucket,
-            updated_at = EXCLUDED.updated_at;
-    """, (push_key, last_value, last_value, datetime.now(TZ_TW)))
-    conn.commit()
-    cur.close()
-    conn.close()
+    with db_cursor(commit=True) as cur:
+        cur.execute("""
+            INSERT INTO push_state (push_key, last_value, last_bucket, updated_at)
+            VALUES (%s, %s, %s, %s)
+            ON CONFLICT (push_key) DO UPDATE
+            SET last_value = EXCLUDED.last_value,
+                last_bucket = EXCLUDED.last_bucket,
+                updated_at = EXCLUDED.updated_at;
+        """, (push_key, last_value, last_value, now_tw()))
 
 
 # =========================
 # 539 真實資料
 # =========================
 def fetch_recent_539_results(max_rows: int = 80):
-    r = requests.get(
+    r = HTTP.get(
         SOURCE_539_URL,
         timeout=15,
         headers={"User-Agent": "Mozilla/5.0"}
@@ -594,17 +579,22 @@ def fetch_recent_539_results(max_rows: int = 80):
     html = r.text
 
     pattern = re.compile(
-        r"開獎日期:(\d{4})/(\d{2})/(\d{2}).{0,20}?\s+(\d{2})[,\s]+(\d{2})[,\s]+(\d{2})[,\s]+(\d{2})[,\s]+(\d{2})",
-        re.MULTILINE
+        r"開獎日期:(\d{4})/(\d{2})/(\d{2}).{0,50}?\s+(\d{2})[,\s]+(\d{2})[,\s]+(\d{2})[,\s]+(\d{2})[,\s]+(\d{2})",
+        re.MULTILINE | re.DOTALL
     )
 
     out = []
+    seen = set()
     for m in pattern.finditer(html):
         y, mo, d = int(m.group(1)), int(m.group(2)), int(m.group(3))
         nums = [int(m.group(i)) for i in range(4, 9)]
         nums_sorted = sorted(nums)
+        draw_date = date(y, mo, d)
+        if draw_date in seen:
+            continue
+        seen.add(draw_date)
         s = " ".join([f"{n:02d}" for n in nums_sorted])
-        out.append((date(y, mo, d), s))
+        out.append((draw_date, s))
         if len(out) >= max_rows:
             break
     return out
@@ -613,16 +603,12 @@ def fetch_recent_539_results(max_rows: int = 80):
 def upsert_539_draws(rows):
     if not rows:
         return
-    conn = get_conn()
-    cur = conn.cursor()
-    cur.executemany("""
-        INSERT INTO lotto_539_draws (draw_date, numbers)
-        VALUES (%s, %s)
-        ON CONFLICT (draw_date) DO UPDATE SET numbers = EXCLUDED.numbers;
-    """, rows)
-    conn.commit()
-    cur.close()
-    conn.close()
+    with db_cursor(commit=True) as cur:
+        cur.executemany("""
+            INSERT INTO lotto_539_draws (draw_date, numbers)
+            VALUES (%s, %s)
+            ON CONFLICT (draw_date) DO UPDATE SET numbers = EXCLUDED.numbers;
+        """, rows)
 
 
 def ensure_latest_539_in_db():
@@ -630,21 +616,18 @@ def ensure_latest_539_in_db():
         rows = fetch_recent_539_results(max_rows=80)
         upsert_539_draws(rows)
     except Exception as e:
-        print("FETCH_539_ERROR:", repr(e))
+        log("FETCH_539_ERROR:", repr(e))
 
 
 def load_539_draws(limit=240):
-    conn = get_conn()
-    cur = conn.cursor()
-    cur.execute("""
-        SELECT draw_date, numbers
-        FROM lotto_539_draws
-        ORDER BY draw_date DESC
-        LIMIT %s;
-    """, (limit,))
-    rows = cur.fetchall()
-    cur.close()
-    conn.close()
+    with db_cursor() as cur:
+        cur.execute("""
+            SELECT draw_date, numbers
+            FROM lotto_539_draws
+            ORDER BY draw_date DESC
+            LIMIT %s;
+        """, (limit,))
+        rows = cur.fetchall()
 
     parsed = []
     for d, s in rows:
@@ -676,44 +659,10 @@ def hot_zone_and_hotnums_539(draws_30):
     return hot_zone, ranked, freq30
 
 
-def build_daily_top_hot(ranked_candidates, pick_date):
-    top_pool = ranked_candidates[:12] if len(ranked_candidates) >= 12 else ranked_candidates[:]
-    if not top_pool:
-        return "01 02 03 04 05"
-
-    rng = random.Random(f"539-top-hot-{pick_date.isoformat()}")
-
-    weighted_pool = []
-    for n, score in top_pool:
-        copies = max(1, score)
-        weighted_pool.extend([n] * copies)
-
-    chosen = set()
-    safe_guard = 0
-    while len(chosen) < min(5, len(top_pool)) and safe_guard < 200:
-        safe_guard += 1
-        chosen.add(rng.choice(weighted_pool))
-
-    if len(chosen) < 5:
-        for n, _ in top_pool:
-            chosen.add(n)
-            if len(chosen) >= 5:
-                break
-
-    return " ".join([f"{n:02d}" for n in sorted(list(chosen)[:5])])
-
-
 def get_prev_day_top_hot(prev_date):
-    conn = get_conn()
-    cur = conn.cursor()
-    cur.execute("""
-        SELECT top_hot
-        FROM daily_pick_cache
-        WHERE pick_date = %s;
-    """, (prev_date,))
-    row = cur.fetchone()
-    cur.close()
-    conn.close()
+    with db_cursor() as cur:
+        cur.execute("SELECT top_hot FROM daily_pick_cache WHERE pick_date = %s;", (prev_date,))
+        row = cur.fetchone()
     return row[0] if row else None
 
 
@@ -750,12 +699,6 @@ def _freq_slice(draws, size):
 
 
 def _gap_score_539(draws):
-    """
-    遺漏值 / 回補分數：
-    - 太近剛開：降權
-    - 中度遺漏：加權
-    - 超長遺漏：保留爆發補位
-    """
     gap = {i: len(draws) + 5 for i in range(1, 40)}
     for idx, (_, nums) in enumerate(draws):
         for n in nums:
@@ -778,7 +721,6 @@ def _gap_score_539(draws):
 
 
 def _head_of(n):
-    # 0頭：01-09；1頭：10-19；2頭：20-29；3頭：30-39
     return n // 10
 
 
@@ -883,14 +825,6 @@ def _weighted_sample_without_replacement(items, weights, k, rng):
     return chosen
 
 
-def _zone_counts(nums):
-    return {
-        "low": sum(1 for n in nums if 1 <= n <= 13),
-        "mid": sum(1 for n in nums if 14 <= n <= 26),
-        "high": sum(1 for n in nums if 27 <= n <= 39),
-    }
-
-
 def _zone_name(n):
     if 1 <= n <= 13:
         return "low"
@@ -899,8 +833,23 @@ def _zone_name(n):
     return "high"
 
 
+def _zone_counts(nums):
+    return {
+        "low": sum(1 for n in nums if 1 <= n <= 13),
+        "mid": sum(1 for n in nums if 14 <= n <= 26),
+        "high": sum(1 for n in nums if 27 <= n <= 39),
+    }
+
+
+def structure_text_from_numbers(nums_text: str):
+    nums = [int(x) for x in nums_text.split()]
+    low = sum(1 for n in nums if 1 <= n <= 13)
+    mid = sum(1 for n in nums if 14 <= n <= 26)
+    high = sum(1 for n in nums if 27 <= n <= 39)
+    return f"低區{low}｜中區{mid}｜高區{high}"
+
+
 def _repair_motherboard_zone(nums, ranked_candidates):
-    """母盤9碼區段修正：避免全擠同區，維持 2~4 顆區間。"""
     nums = sorted(set(nums))
     counts = _zone_counts(nums)
     selected = set(nums)
@@ -919,6 +868,7 @@ def _repair_motherboard_zone(nums, ranked_candidates):
             removable = [x for x in nums if _zone_name(x) == over_zone]
             if not removable:
                 break
+
             remove = removable[-1]
             nums.remove(remove)
             selected.remove(remove)
@@ -933,17 +883,8 @@ def _repair_motherboard_zone(nums, ranked_candidates):
 
 
 def build_motherboard_models_539(draws_240):
-    """
-    539 商業版母盤引擎：
-    - 頻率：30/120/240期
-    - 遺漏值：gap 回補
-    - 頭數輪動：0頭/1頭/2頭/3頭
-    - 尾數型態：同尾爆量、關聯尾、斷層尾
-    - 鄰號補位：近期開出號碼的前後鄰號
-    最後產出：9碼母盤、3碼主軸、5碼主攻、8碼爆發。
-    """
-    today = datetime.now(TZ_TW).date()
-    rng = random.Random(f"539-motherboard-v3-{today.isoformat()}")
+    seed_date = today_tw()
+    rng = random.Random(f"539-motherboard-v4-{seed_date.isoformat()}")
 
     if not draws_240:
         fallback = [4, 8, 13, 18, 21, 27, 33, 36, 39]
@@ -1039,8 +980,6 @@ def build_motherboard_models_539(draws_240):
         if len(burst4) >= 8:
             break
 
-    stable2 = list(core)
-
     cold_note_nums = [n for n in motherboard if gap_raw.get(n, 0) >= 10]
     cold_note = _fmt_nums(cold_note_nums[:3]) if cold_note_nums else _fmt_nums(cold_candidates[:2])
 
@@ -1053,7 +992,7 @@ def build_motherboard_models_539(draws_240):
     return {
         "motherboard": _fmt_nums(motherboard),
         "core": _fmt_nums(core),
-        "stable2": _fmt_nums(stable2),
+        "stable2": _fmt_nums(core),
         "attack3": _fmt_nums(attack3),
         "burst4": _fmt_nums(burst4),
         "pattern_note": pattern_note,
@@ -1073,7 +1012,7 @@ def build_daily_top_hot(ranked_candidates, pick_date):
 
     weighted_pool = []
     for n, score in top_pool:
-        copies = max(1, score)
+        copies = max(1, int(score))
         weighted_pool.extend([n] * copies)
 
     chosen = set()
@@ -1092,18 +1031,15 @@ def build_daily_top_hot(ranked_candidates, pick_date):
 
 
 def get_or_build_today_pick_539():
-    today = datetime.now(TZ_TW).date()
+    today = today_tw()
 
-    conn = get_conn()
-    cur = conn.cursor()
-    cur.execute("""
-        SELECT numbers, hot_zone, top_hot, note
-        FROM daily_pick_cache
-        WHERE pick_date = %s;
-    """, (today,))
-    row = cur.fetchone()
-    cur.close()
-    conn.close()
+    with db_cursor() as cur:
+        cur.execute("""
+            SELECT numbers, hot_zone, top_hot, note
+            FROM daily_pick_cache
+            WHERE pick_date = %s;
+        """, (today,))
+        row = cur.fetchone()
 
     if row:
         return {"numbers": row[0], "hot_zone": row[1], "top_hot": row[2], "note": row[3]}
@@ -1112,7 +1048,7 @@ def get_or_build_today_pick_539():
     draws_240 = load_539_draws(limit=240)
     d30 = draws_240[:30] if len(draws_240) >= 30 else draws_240
 
-    hot_zone, ranked_candidates, f30 = hot_zone_and_hotnums_539(d30)
+    hot_zone, ranked_candidates, _ = hot_zone_and_hotnums_539(d30)
     prev_top_hot = get_prev_day_top_hot(today - timedelta(days=1))
     top_hot = build_daily_top_hot(ranked_candidates, today)
 
@@ -1120,24 +1056,19 @@ def get_or_build_today_pick_539():
         top_hot = build_daily_top_hot(ranked_candidates[::-1], today)
 
     models = build_motherboard_models_539(draws_240)
-
     note = json.dumps(models, ensure_ascii=False)
 
-    conn = get_conn()
-    cur = conn.cursor()
-    cur.execute("""
-        INSERT INTO daily_pick_cache (pick_date, numbers, hot_zone, top_hot, note, created_at)
-        VALUES (%s, %s, %s, %s, %s, %s)
-        ON CONFLICT (pick_date) DO UPDATE
-        SET numbers = EXCLUDED.numbers,
-            hot_zone = EXCLUDED.hot_zone,
-            top_hot = EXCLUDED.top_hot,
-            note = EXCLUDED.note,
-            created_at = EXCLUDED.created_at;
-    """, (today, models["motherboard"], hot_zone, top_hot, note, datetime.now(TZ_TW)))
-    conn.commit()
-    cur.close()
-    conn.close()
+    with db_cursor(commit=True) as cur:
+        cur.execute("""
+            INSERT INTO daily_pick_cache (pick_date, numbers, hot_zone, top_hot, note, created_at)
+            VALUES (%s, %s, %s, %s, %s, %s)
+            ON CONFLICT (pick_date) DO UPDATE
+            SET numbers = EXCLUDED.numbers,
+                hot_zone = EXCLUDED.hot_zone,
+                top_hot = EXCLUDED.top_hot,
+                note = EXCLUDED.note,
+                created_at = EXCLUDED.created_at;
+        """, (today, models["motherboard"], hot_zone, top_hot, note, now_tw()))
 
     return {
         "numbers": models["motherboard"],
@@ -1189,23 +1120,102 @@ def parse_models_from_note(note_text: str):
         return fallback
 
 
-def structure_text_from_numbers(nums_text: str):
-    nums = [int(x) for x in nums_text.split()]
-    low = sum(1 for n in nums if 1 <= n <= 13)
-    mid = sum(1 for n in nums if 14 <= n <= 26)
-    high = sum(1 for n in nums if 27 <= n <= 39)
-    return f"低區{low}｜中區{mid}｜高區{high}"
+# =========================
+# 539 命中追蹤
+# =========================
+def update_latest_model_result():
+    """
+    不需要額外設定。
+    只要抓得到最新539開獎，就會把昨日/當日快取母盤和實際號碼比對寫入 model_results。
+    """
+    try:
+        ensure_latest_539_in_db()
+        draws = load_539_draws(limit=3)
+        if not draws:
+            return None
+
+        latest_date, actual_nums = draws[0]
+
+        with db_cursor() as cur:
+            cur.execute("""
+                SELECT numbers
+                FROM daily_pick_cache
+                WHERE pick_date <= %s
+                ORDER BY pick_date DESC
+                LIMIT 1;
+            """, (latest_date,))
+            row = cur.fetchone()
+
+        if not row:
+            return None
+
+        motherboard = row[0]
+        mb_nums = set(_parse_nums_text(motherboard))
+        hit_count = len(mb_nums & set(actual_nums))
+        actual_text = _fmt_nums(actual_nums)
+
+        with db_cursor(commit=True) as cur:
+            cur.execute("""
+                INSERT INTO model_results (result_date, motherboard, actual_numbers, hit_count, created_at)
+                VALUES (%s, %s, %s, %s, %s)
+                ON CONFLICT (result_date) DO UPDATE
+                SET motherboard = EXCLUDED.motherboard,
+                    actual_numbers = EXCLUDED.actual_numbers,
+                    hit_count = EXCLUDED.hit_count,
+                    created_at = EXCLUDED.created_at;
+            """, (latest_date, motherboard, actual_text, hit_count, now_tw()))
+
+        return {
+            "date": latest_date,
+            "motherboard": motherboard,
+            "actual": actual_text,
+            "hit": hit_count
+        }
+    except Exception as e:
+        log("UPDATE_MODEL_RESULT ERROR:", repr(e))
+        return None
+
+
+def get_latest_model_result_text():
+    try:
+        with db_cursor() as cur:
+            cur.execute("""
+                SELECT result_date, motherboard, actual_numbers, hit_count
+                FROM model_results
+                ORDER BY result_date DESC
+                LIMIT 1;
+            """)
+            row = cur.fetchone()
+
+        if not row:
+            result = update_latest_model_result()
+            if not result:
+                return ""
+            return (
+                "\n▍最近母盤追蹤\n"
+                f"{result['date'].strftime('%Y.%m.%d')}｜命中{result['hit']}顆\n"
+                f"開獎：{result['actual']}\n"
+            )
+
+        d, mb, actual, hit = row
+        return (
+            "\n▍最近母盤追蹤\n"
+            f"{d.strftime('%Y.%m.%d')}｜命中{hit}顆\n"
+            f"開獎：{actual}\n"
+        )
+    except Exception as e:
+        log("GET_LATEST_RESULT_TEXT ERROR:", repr(e))
+        return ""
 
 
 def format_539_push():
     try:
         pack = get_or_build_today_pick_539()
-        today_str = datetime.now(TZ_TW).strftime("%Y.%m.%d")
+        today_str = now_tw().strftime("%Y.%m.%d")
         quote = get_daily_quote()
         m = parse_models_from_note(pack["note"])
-
         rank_lines = pack["top_hot"].split()
-        rank_text = "\n".join(rank_lines[:5])
+        result_text = get_latest_model_result_text()
 
         return (
             "【理性陪跑研究室｜539 AI母盤日報】\n\n"
@@ -1222,11 +1232,12 @@ def format_539_push():
             f"{structure_text_from_numbers(m['motherboard'])}\n"
             f"近30期活躍區段：{pack['hot_zone']}\n"
             f"冷號補位：{m.get('cold_note', '無')}\n"
-            f"高頻樣本：{'・'.join(rank_lines[:4])}\n\n"
+            f"高頻樣本：{'・'.join(rank_lines[:4])}\n"
+            f"{result_text}\n"
             "▍型態判斷\n"
             f"{m.get('pattern_note', '')}\n\n"
             "▍AI熱度排行\n"
-            f"{rank_text}\n\n"
+            f"{chr(10).join(rank_lines[:5])}\n\n"
             "▍使用邏輯\n"
             "2星看主軸，3星看主攻，4星看爆發盤。\n"
             "三層都來自同一組母盤，不是分開亂數。\n\n"
@@ -1235,7 +1246,7 @@ def format_539_push():
             "（數據結構參考，非保證）"
         )
     except Exception as e:
-        print("FORMAT_539_PUSH ERROR:", repr(e))
+        log("FORMAT_539_PUSH ERROR:", repr(e))
         return (
             "【理性陪跑研究室｜539 AI母盤日報】\n\n"
             "核心母盤\n04 08 13 18 21 27 33 36 39\n\n"
@@ -1250,6 +1261,7 @@ def format_today_companion():
         pack = get_or_build_today_pick_539()
         m = parse_models_from_note(pack["note"])
         quote = get_daily_quote()
+        result_text = get_latest_model_result_text()
 
         return (
             "【今日539 AI母盤】\n\n"
@@ -1265,7 +1277,8 @@ def format_today_companion():
             f"{structure_text_from_numbers(m['motherboard'])}\n"
             f"活躍區段：{pack['hot_zone']}\n"
             f"冷號補位：{m.get('cold_note', '無')}\n"
-            f"高頻樣本：{'・'.join(pack['top_hot'].split()[:4])}\n\n"
+            f"高頻樣本：{'・'.join(pack['top_hot'].split()[:4])}\n"
+            f"{result_text}\n"
             "▍型態判斷\n"
             f"{m.get('pattern_note', '')}\n\n"
             "▍策略解讀\n"
@@ -1277,7 +1290,7 @@ def format_today_companion():
             "（數據結構參考，非保證）"
         )
     except Exception as e:
-        print("FORMAT_TODAY_COMPANION ERROR:", repr(e))
+        log("FORMAT_TODAY_COMPANION ERROR:", repr(e))
         return (
             "【今日539 AI母盤】\n\n"
             "核心母盤\n04 08 13 18 21 27 33 36 39\n\n"
@@ -1288,60 +1301,11 @@ def format_today_companion():
 # =========================
 # 539 智能點數配置
 # =========================
-def detect_market_state_for_bet():
-    """
-    依近30期539熱度集中度判斷盤勢。
-    抓不到資料時回傳 normal，避免影響 webhook。
-    """
-    try:
-        ensure_latest_539_in_db()
-        draws = load_539_draws(limit=30)
-
-        freq30 = {i: 0 for i in range(1, 40)}
-        for _, nums in draws:
-            for n in nums:
-                freq30[n] += 1
-
-        values = list(freq30.values())
-        avg = sum(values) / len(values) if values else 0
-        if avg <= 0:
-            return "normal"
-
-        high = sum(1 for v in values if v > avg * 1.3)
-        low = sum(1 for v in values if v < avg * 0.7)
-
-        if high >= 6:
-            return "stable"
-        elif low >= 10:
-            return "chaos"
-        else:
-            return "normal"
-    except Exception as e:
-        print("DETECT_MARKET_STATE_FOR_BET ERROR:", repr(e))
-        return "normal"
-
-
-def get_combo_by_state(state):
-    if state == "stable":
-        return 10, 10, 15, "集中盤｜縮盤提高精準度"
-    elif state == "chaos":
-        return 21, 20, 35, "混亂盤｜擴盤提高覆蓋率"
-    else:
-        return 15, 10, 15, "一般盤｜平衡配置"
-
-
 def build_bet_plan(total, mode="balanced"):
-    """
-    539 點數配置：
-    - 直接引用今日陪跑號碼
-    - 顯示 2/3/4 星要選幾顆、共幾碰
-    - 不展開全部組合，避免畫面太亂
-    """
     try:
         total = int(total)
     except Exception:
         total = 3000
-
     if total <= 0:
         total = 3000
 
@@ -1393,9 +1357,8 @@ def build_bet_plan(total, mode="balanced"):
         two_nums = nums_from_text(m.get("stable2", ""), 3)
         three_nums = nums_from_text(m.get("attack3", ""), 5)
         four_nums = nums_from_text(m.get("burst4", ""), 6)
-
-        # 防呆：若舊快取或資料異常，從母盤補齊
         mother = nums_from_text(m.get("motherboard", ""))
+
         for n in mother:
             if len(two_nums) < 3 and n not in two_nums:
                 two_nums.append(n)
@@ -1404,7 +1367,6 @@ def build_bet_plan(total, mode="balanced"):
             if len(four_nums) < 6 and n not in four_nums:
                 four_nums.append(n)
 
-        # 最後防呆，避免任何情況下不足顆數
         for n in range(1, 40):
             if len(two_nums) < 3 and n not in two_nums:
                 two_nums.append(n)
@@ -1419,12 +1381,11 @@ def build_bet_plan(total, mode="balanced"):
         three_nums = sorted(three_nums[:5])
         four_nums = sorted(four_nums[:6])
     except Exception as e:
-        print("BUILD_BET_PLAN_NUMBERS_ERROR:", repr(e))
+        log("BUILD_BET_PLAN_NUMBERS_ERROR:", repr(e))
         two_nums = [18, 21, 33]
         three_nums = [8, 18, 21, 33, 36]
         four_nums = [4, 8, 18, 21, 27, 33]
 
-    # 固定顆數 / 碰數，與今日陪跑對齊
     c2, c3, c4 = 3, 10, 15
     odd2, odd3, odd4 = 70.44, 840, 12000
 
@@ -1455,38 +1416,33 @@ def build_bet_plan(total, mode="balanced"):
         f"【539 點數配置｜{money(total)}點】\n\n"
         f"模式：{cfg['name']}\n"
         f"策略：{cfg['desc']}\n\n"
-
+        "▍今日建議打法\n"
+        "小本金：主打2星＋3星\n"
+        "中本金：3星主攻，4星小注\n"
+        "高本金：4星放大，但不追單\n\n"
+        "重點不是每期都重壓，\n"
+        "而是照同一套結構執行。\n\n"
         "▍使用號碼（直接照下）\n\n"
-
         f"2星：{fmt_nums(two_nums)}\n"
         "👉 選3顆，全碰\n"
         f"{two_combo_text}\n"
         "共3碰\n\n"
-
         f"3星：{fmt_nums(three_nums)}\n"
         "👉 任選3顆組合，共10碰\n\n"
-
         f"4星：{fmt_nums(four_nums)}\n"
         "👉 任選4顆組合，共15碰\n\n"
-
         "━━━━━━━━━━━━━━━\n\n"
-
         "▍點數分配\n\n"
         f"2星：每碰 {money(per2)} × 3碰 = {money(real2)}\n"
         f"3星：每碰 {money(per3)} × 10碰 = {money(real3)}\n"
         f"4星：每碰 {money(per4)} × 15碰 = {money(real4)}\n\n"
-
         f"實際投入：約 {money(real_total)} 點\n\n"
-
         "━━━━━━━━━━━━━━━\n\n"
-
         "▍命中試算\n\n"
         f"中2星：約 {money(win2)}\n"
         f"中3星：約 {money(win3)}\n"
         f"中4星：約 {money(win4)}\n\n"
-
         "━━━━━━━━━━━━━━━\n\n"
-
         "▍下注說明\n\n"
         "系統已幫你整理顆數與碰數。\n"
         "直接用上方號碼照星級全碰即可。\n\n"
@@ -1496,54 +1452,17 @@ def build_bet_plan(total, mode="balanced"):
         "（點數配置僅供策略參考）"
     )
 
-def reply_bet_plan_menu(reply_token: str):
-    if not CHANNEL_ACCESS_TOKEN:
-        print("CHANNEL_ACCESS_TOKEN empty")
-        return
-
-    payload = {
-        "replyToken": reply_token,
-        "messages": [
-            {
-                "type": "template",
-                "altText": "539點數配置",
-                "template": {
-                    "type": "buttons",
-                    "title": "539 點數配置",
-                    "text": "請選擇配置模式",
-                    "actions": [
-                        {"type": "message", "label": "穩健1000", "text": "穩健 1000"},
-                        {"type": "message", "label": "均衡3000", "text": "均衡 3000"},
-                        {"type": "message", "label": "爆發5000", "text": "爆發 5000"},
-                        {"type": "message", "label": "爆發10000", "text": "爆發 10000"}
-                    ]
-                }
-            }
-        ]
-    }
-
-    try:
-        r = requests.post(
-            "https://api.line.me/v2/bot/message/reply",
-            headers={
-                "Authorization": f"Bearer {CHANNEL_ACCESS_TOKEN}",
-                "Content-Type": "application/json"
-            },
-            json=payload,
-            timeout=10
-        )
-        print("LINE BET MENU STATUS:", r.status_code)
-        if r.status_code >= 400:
-            print("LINE BET MENU BODY:", r.text[:500])
-    except Exception as e:
-        print("LINE BET MENU EXCEPTION:", repr(e))
-
 
 # =========================
 # Bingo 備援模式
 # =========================
 def fetch_recent_bingo_results(max_rows: int = 60):
-    now = datetime.now(TZ_TW)
+    """
+    目前保留你的原本備援邏輯：用時間序列產生穩定模型資料。
+    因為你要求只換 app.py、不另外設定資料源，所以這裡不硬接未知外部 API，避免跑不動。
+    之後若你提供 Bingo 真實開獎 URL，只需要替換這個函式即可。
+    """
+    now = now_tw()
     start_dt = now.replace(hour=7, minute=5, second=0, microsecond=0)
 
     if now < start_dt:
@@ -1599,8 +1518,7 @@ def bingo_zone_summary(draws):
 
 
 def _time_bucket(minutes_step: int):
-    now = datetime.now(TZ_TW)
-    return int(now.timestamp() // 60) // minutes_step
+    return int(now_tw().timestamp() // 60) // minutes_step
 
 
 def _weighted_pick_bingo(freq_dict, seed_text: str):
@@ -1636,7 +1554,7 @@ def get_bingo_analysis_bundle():
     try:
         draws = fetch_recent_bingo_results(max_rows=30)
     except Exception as e:
-        print("GET_BINGO_ANALYSIS_BUNDLE ERROR:", repr(e))
+        log("GET_BINGO_ANALYSIS_BUNDLE ERROR:", repr(e))
         draws = []
 
     if not draws:
@@ -1663,7 +1581,7 @@ def get_bingo_analysis_bundle():
         zone5, hot5, freq5 = bingo_zone_summary(d5)
         zone10, hot10, freq10 = bingo_zone_summary(d10)
 
-        seed_base = datetime.now(TZ_TW).strftime("%Y%m%d")
+        seed_base = now_tw().strftime("%Y%m%d")
         one = _weighted_pick_bingo(freq1, f"{seed_base}-b1-{_time_bucket(5)}")
         five = _weighted_pick_bingo(freq5, f"{seed_base}-b5-{_time_bucket(15)}")
         ten = _weighted_pick_bingo(freq10, f"{seed_base}-b10-{_time_bucket(25)}")
@@ -1689,7 +1607,7 @@ def get_bingo_analysis_bundle():
         }
 
     except Exception as e:
-        print("GET_BINGO_ANALYSIS_BUNDLE BUILD ERROR:", repr(e))
+        log("GET_BINGO_ANALYSIS_BUNDLE BUILD ERROR:", repr(e))
         return {
             "one": "07 19 34 52 71",
             "five": "05 22 31 46 68",
@@ -1707,7 +1625,6 @@ def get_bingo_analysis_bundle():
 def format_bingo_1_message():
     try:
         b = get_bingo_analysis_bundle()
-
         return (
             "【Bingo AI短線分析】\n\n"
             "1期分析\n"
@@ -1724,20 +1641,14 @@ def format_bingo_1_message():
             "高區補位機率存在。\n\n"
             "（數據結構參考）"
         )
-
     except Exception as e:
-        print("FORMAT_BINGO_1 ERROR:", repr(e))
-        return (
-            "【Bingo AI短線分析】\n\n"
-            "1期分析\n"
-            "07 19 34 52 71"
-        )
+        log("FORMAT_BINGO_1 ERROR:", repr(e))
+        return "【Bingo AI短線分析】\n\n1期分析\n07 19 34 52 71"
 
 
 def format_bingo_5_message():
     try:
         b = get_bingo_analysis_bundle()
-
         return (
             "【Bingo AI節奏分析】\n\n"
             "5期分析\n"
@@ -1754,19 +1665,14 @@ def format_bingo_5_message():
             "短線可優先觀察中區帶。\n\n"
             "（數據結構參考）"
         )
-
     except Exception as e:
-        print("FORMAT_BINGO_5 ERROR:", repr(e))
-        return (
-            "【Bingo AI節奏分析】\n\n"
-            "5期分析\n"
-            "05 22 31 46 68"
-        )
+        log("FORMAT_BINGO_5 ERROR:", repr(e))
+        return "【Bingo AI節奏分析】\n\n5期分析\n05 22 31 46 68"
+
 
 def format_bingo_10_message():
     try:
         b = get_bingo_analysis_bundle()
-
         return (
             "【Bingo AI結構分析】\n\n"
             "10期分析\n"
@@ -1783,14 +1689,9 @@ def format_bingo_10_message():
             "短線仍有延續機會。\n\n"
             "（數據結構參考）"
         )
-
     except Exception as e:
-        print("FORMAT_BINGO_10 ERROR:", repr(e))
-        return (
-            "【Bingo AI結構分析】\n\n"
-            "10期分析\n"
-            "09 18 27 55 79"
-        )
+        log("FORMAT_BINGO_10 ERROR:", repr(e))
+        return "【Bingo AI結構分析】\n\n10期分析\n09 18 27 55 79"
 
 
 def format_bingo_evening_push():
@@ -1799,7 +1700,7 @@ def format_bingo_evening_push():
         quote = get_daily_quote()
         return (
             "【理性陪跑研究室｜Bingo Bingo】\n"
-            f"{datetime.now(TZ_TW).strftime('%Y.%m.%d')} 晚間模型\n\n"
+            f"{now_tw().strftime('%Y.%m.%d')} 晚間模型\n\n"
             "▍1期短線模型\n"
             f"{b['one']}\n\n"
             "▍5期節奏模型\n"
@@ -1810,7 +1711,7 @@ def format_bingo_evening_push():
             f"{quote}"
         )
     except Exception as e:
-        print("FORMAT_BINGO_EVENING ERROR:", repr(e))
+        log("FORMAT_BINGO_EVENING ERROR:", repr(e))
         return "【理性陪跑研究室｜Bingo Bingo】\n\n07 19 34 52 71"
 
 
@@ -1833,7 +1734,7 @@ def format_bingo_latest_push():
     if latest:
         return latest["period"], msg
 
-    fake_period = datetime.now(TZ_TW).strftime("%Y%m%d%H%M")
+    fake_period = now_tw().strftime("%Y%m%d%H%M")
     return fake_period, msg
 
 
@@ -1847,6 +1748,51 @@ def format_expiry_reminder(exp_dt):
     )
 
 
+def format_welcome_message(exp_dt=None):
+    exp_line = ""
+    if exp_dt:
+        exp_line = f"\n到期時間：{exp_dt.astimezone(TZ_TW).strftime('%Y-%m-%d %H:%M')}\n"
+
+    return (
+        "✅ 會員已開通\n"
+        f"{exp_line}\n"
+        "你現在可以使用：\n\n"
+        "1. 今日陪跑\n"
+        "查看539母盤、主軸、3星、4星盤\n\n"
+        "2. 點數配置\n"
+        "依本金產生點數配置\n\n"
+        "3. 賓果分析\n"
+        "查看1期、5期、10期模型\n\n"
+        "4. 預測分析\n"
+        "開啟Bingo即時推播\n\n"
+        "建議先輸入：今日陪跑"
+    )
+
+
+def format_help_message():
+    return (
+        "【功能選單】\n\n"
+        "今日陪跑\n"
+        "查看539 AI模型\n\n"
+        "免費試用\n"
+        "免費體驗24小時（每人一次）\n\n"
+        "點數配置\n"
+        "539 2星/3星/4星智能配置\n\n"
+        "賓果分析\n"
+        "查看賓果模型\n\n"
+        "1期 / 5期 / 10期\n"
+        "快速取得賓果分析\n\n"
+        "預測分析\n"
+        "開啟即時模型推播\n\n"
+        "取消預測分析\n"
+        "停止即時推播\n\n"
+        "開啟每日推播\n"
+        "取消每日推播\n\n"
+        "我的到期日\n"
+        "查看會員期限"
+    )
+
+
 # =========================
 # Health
 # =========================
@@ -1855,14 +1801,14 @@ def health():
     return "OK", 200
 
 
-# =========================
-# Cron Routes
-# =========================
 @app.route("/")
 def home():
     return "Bot is running.", 200
 
 
+# =========================
+# Cron Routes
+# =========================
 @app.route("/cron/daily-push")
 def cron_daily_push():
     secret = request.args.get("secret", "")
@@ -1870,12 +1816,13 @@ def cron_daily_push():
         abort(403)
 
     try:
-        init_db()
+        ensure_db_ready()
+        update_latest_model_result()
+
         members = get_daily_push_users()
-        now = datetime.now(TZ_TW)
+        now = now_tw()
         today_key = now.strftime("%Y-%m-%d")
 
-        # 到期前三天提醒
         reminder_key = f"expiry_reminder_{today_key}"
         if get_push_state(reminder_key) is None:
             expiring_rows = get_expiring_members(days_before=3)
@@ -1886,7 +1833,6 @@ def cron_daily_push():
         if not members:
             return "No active members", 200
 
-        # 539：週日不推
         if now.weekday() != 6:
             key_539 = f"daily_539_{today_key}"
             if get_push_state(key_539) is None:
@@ -1895,7 +1841,6 @@ def cron_daily_push():
                     push_message(uid, msg539)
                 set_push_state(key_539, "done")
 
-        # Bingo：每天都推
         key_bingo = f"daily_bingo_{today_key}"
         if get_push_state(key_bingo) is None:
             msg_bingo = format_bingo_evening_push()
@@ -1905,7 +1850,7 @@ def cron_daily_push():
 
         return "OK", 200
     except Exception as e:
-        print("CRON_DAILY_ERROR:", repr(e))
+        log("CRON_DAILY_ERROR:", repr(e))
         return "ERROR", 500
 
 
@@ -1916,10 +1861,9 @@ def cron_check_bingo():
         return "Forbidden: bad secret", 403
 
     try:
-        init_db()
+        ensure_db_ready()
 
-        now = datetime.now(TZ_TW)
-        hhmm = now.strftime("%H:%M")
+        hhmm = now_tw().strftime("%H:%M")
         if hhmm < "07:05" or hhmm > "23:55":
             return f"Outside draw hours: {hhmm}", 200
 
@@ -1945,7 +1889,24 @@ def cron_check_bingo():
         return f"OK. period={period}, pushed={success_count}", 200
 
     except Exception as e:
-        print("CRON_BINGO_ERROR:", repr(e))
+        log("CRON_BINGO_ERROR:", repr(e))
+        return f"ERROR: {repr(e)}", 500
+
+
+@app.route("/cron/update-539-result")
+def cron_update_539_result():
+    secret = request.args.get("secret", "")
+    if secret != CRON_SECRET:
+        return "Forbidden: bad secret", 403
+
+    try:
+        ensure_db_ready()
+        result = update_latest_model_result()
+        if not result:
+            return "No result updated", 200
+        return f"OK {result}", 200
+    except Exception as e:
+        log("CRON_UPDATE_539_RESULT_ERROR:", repr(e))
         return f"ERROR: {repr(e)}", 500
 
 
@@ -1959,18 +1920,18 @@ def webhook():
         signature = request.headers.get("X-Line-Signature", "")
 
         if not verify_line_signature(raw, signature):
-            print("SIGNATURE ERROR")
+            log("SIGNATURE ERROR")
             abort(403)
 
         body = request.get_json(silent=True) or {}
         events = body.get("events", [])
 
-        print("WEBHOOK HIT AT:", datetime.now(TZ_TW).strftime("%Y-%m-%d %H:%M:%S"))
+        log("WEBHOOK HIT AT:", now_tw().strftime("%Y-%m-%d %H:%M:%S"))
 
         try:
-            init_db()
+            ensure_db_ready()
         except Exception as e:
-            print("INIT_DB ERROR:", repr(e))
+            log("INIT_DB ERROR:", repr(e))
             return "OK"
 
         for event in events:
@@ -1986,8 +1947,8 @@ def webhook():
                 reply_token = event.get("replyToken")
                 user_id = event.get("source", {}).get("userId", "")
 
-                print("WEBHOOK TEXT:", text)
-                print("WEBHOOK USER:", user_id)
+                log("WEBHOOK TEXT:", text)
+                log("WEBHOOK USER:", user_id)
 
                 if text == "申請加入會員":
                     reply_message(
@@ -2006,11 +1967,10 @@ def webhook():
                 if text in ("免費試用", "免費體驗", "試用一天", "免費使用1天", "免費使用一天"):
                     exp_dt, status = start_free_trial(user_id, hours=24)
                     if status == "already_member" and exp_dt:
-                        exp_tw = exp_dt.astimezone(TZ_TW)
                         reply_message(
                             reply_token,
                             "✅ 你目前已經是會員\n\n"
-                            f"到期時間：{exp_tw.strftime('%Y-%m-%d %H:%M')}\n\n"
+                            f"到期時間：{exp_dt.astimezone(TZ_TW).strftime('%Y-%m-%d %H:%M')}\n\n"
                             "可直接輸入：今日陪跑 / 賓果分析"
                         )
                     elif status == "used":
@@ -2020,12 +1980,11 @@ def webhook():
                             "若要繼續使用完整模型，請輸入：申請加入會員"
                         )
                     elif status == "opened" and exp_dt:
-                        exp_tw = exp_dt.astimezone(TZ_TW)
                         reply_message(
                             reply_token,
                             "✅ 免費試用已開通\n\n"
                             "可使用時間：24小時\n"
-                            f"到期時間：{exp_tw.strftime('%Y-%m-%d %H:%M')}\n\n"
+                            f"到期時間：{exp_dt.astimezone(TZ_TW).strftime('%Y-%m-%d %H:%M')}\n\n"
                             "可輸入：\n"
                             "今日陪跑\n"
                             "點數配置\n"
@@ -2036,7 +1995,6 @@ def webhook():
                     else:
                         reply_message(reply_token, "暫時無法開通試用，請稍後再試。")
                     continue
-
 
                 if text == "點數配置":
                     if not is_member(user_id):
@@ -2055,17 +2013,11 @@ def webhook():
                             raise ValueError("bad format")
                         mode_word = parts[0]
                         amount = int(parts[1])
-
-                        mode_map = {
-                            "穩健": "safe",
-                            "均衡": "balanced",
-                            "爆發": "burst",
-                        }
-
+                        mode_map = {"穩健": "safe", "均衡": "balanced", "爆發": "burst"}
                         msg = build_bet_plan(amount, mode_map.get(mode_word, "balanced"))
                         reply_message(reply_token, msg)
                     except Exception as e:
-                        print("BET_PLAN_INPUT_ERROR:", repr(e))
+                        log("BET_PLAN_INPUT_ERROR:", repr(e))
                         reply_message(reply_token, "格式錯誤\n例如：穩健 3000 / 均衡 3000 / 爆發 5000")
                     continue
 
@@ -2075,37 +2027,14 @@ def webhook():
                         continue
                     try:
                         amount = int(text.replace("下注", "").strip())
-                        msg = build_bet_plan(amount, "balanced")
-                        reply_message(reply_token, msg)
+                        reply_message(reply_token, build_bet_plan(amount, "balanced"))
                     except Exception as e:
-                        print("BET_PLAN_CUSTOM_ERROR:", repr(e))
+                        log("BET_PLAN_CUSTOM_ERROR:", repr(e))
                         reply_message(reply_token, "格式錯誤\n例如：下注 3000")
                     continue
 
                 if text in ("指令", "help", "HELP"):
-                    reply_message(
-                        reply_token,
-                        "【功能選單】\n\n"
-                        "今日陪跑\n"
-                        "查看539 AI模型\n\n"
-                        "免費試用\n"
-                        "免費體驗24小時（每人一次）\n\n"
-                        "點數配置\n"
-                        "539 2星/3星/4星智能配置\n\n"
-                        "賓果分析\n"
-                        "查看賓果模型\n\n"
-                        "賓果1期分析\n"
-                        "賓果5期分析\n"
-                        "賓果10期分析\n\n"
-                        "預測分析\n"
-                        "開啟即時模型推播\n\n"
-                        "取消預測分析\n"
-                        "停止即時推播\n\n"
-                        "開啟每日推播\n"
-                        "取消每日推播\n\n"
-                        "我的到期日\n"
-                        "查看會員期限"
-                    )
+                    reply_message(reply_token, format_help_message())
                     continue
 
                 if text.startswith("遊戲帳號 "):
@@ -2124,10 +2053,11 @@ def webhook():
                         )
                     continue
 
-                if text.startswith("待確認 "):
+                if text.startswith("待確認"):
                     parts = text.split()
-                    if len(parts) != 2 or parts[1] != ADMIN_SECRET:
-                        reply_message(reply_token, "管理密碼錯誤。")
+                    secret = parts[1] if len(parts) >= 2 else ""
+                    if not admin_ok(user_id, secret):
+                        reply_message(reply_token, "管理權限不足。")
                         continue
 
                     rows = get_latest_pending(50)
@@ -2144,13 +2074,15 @@ def webhook():
 
                 if text.startswith("確認 "):
                     parts = text.split()
-                    if len(parts) != 3:
+                    if len(parts) not in (2, 3):
                         reply_message(reply_token, "格式：確認 <遊戲帳號> <管理密碼>\n例：確認 123456 aaa888")
                         continue
 
-                    _, game_account, secret = parts
-                    if secret != ADMIN_SECRET:
-                        reply_message(reply_token, "管理密碼錯誤。")
+                    game_account = parts[1]
+                    secret = parts[2] if len(parts) == 3 else ""
+
+                    if not admin_ok(user_id, secret):
+                        reply_message(reply_token, "管理權限不足。")
                         continue
 
                     target_user_id = pop_pending_user_id(game_account)
@@ -2167,6 +2099,8 @@ def webhook():
                         f"帳號：{game_account}\n"
                         f"到期（台灣時間）：{dt_tw.strftime('%Y-%m-%d %H:%M')}"
                     )
+
+                    push_message(target_user_id, format_welcome_message(dt_tw))
                     continue
 
                 if text == "我的到期日":
@@ -2174,8 +2108,7 @@ def webhook():
                     if not exp:
                         reply_message(reply_token, "你目前尚未開通。\n請先輸入：遊戲帳號 XXXXX")
                     else:
-                        exp_tw = exp.astimezone(TZ_TW)
-                        reply_message(reply_token, "⏳ 你的到期時間（台灣時間）：\n" + exp_tw.strftime("%Y-%m-%d %H:%M"))
+                        reply_message(reply_token, "⏳ 你的到期時間（台灣時間）：\n" + exp.astimezone(TZ_TW).strftime("%Y-%m-%d %H:%M"))
                     continue
 
                 if text == "預測分析":
@@ -2217,6 +2150,15 @@ def webhook():
                         reply_message(reply_token, format_today_companion())
                     continue
 
+                if text == "母盤追蹤":
+                    if not is_member(user_id):
+                        reply_message(reply_token, "🌿 母盤追蹤屬於會員內容\n\n請先輸入：遊戲帳號 XXXXX")
+                    else:
+                        update_latest_model_result()
+                        msg = get_latest_model_result_text()
+                        reply_message(reply_token, msg.strip() if msg.strip() else "目前尚無可追蹤資料。")
+                    continue
+
                 if text in ("1期", "賓果1期分析"):
                     if not is_member(user_id):
                         reply_message(reply_token, "🌿 賓果1期分析屬於會員內容\n\n請先輸入：遊戲帳號 XXXXX")
@@ -2241,24 +2183,29 @@ def webhook():
                 reply_message(reply_token, "輸入「指令」查看功能。")
 
             except Exception as e:
-                print("EVENT HANDLE ERROR:", repr(e))
+                log("EVENT HANDLE ERROR:", repr(e))
                 try:
                     if event.get("replyToken"):
                         reply_message(event.get("replyToken"), "系統忙碌中，請稍後再試一次。")
                 except Exception as e2:
-                    print("REPLY FAIL AFTER EVENT ERROR:", repr(e2))
+                    log("REPLY FAIL AFTER EVENT ERROR:", repr(e2))
                 continue
 
         return "OK"
 
     except Exception as e:
-        print("WEBHOOK FATAL ERROR:", repr(e))
+        log("WEBHOOK FATAL ERROR:", repr(e))
         return "OK"
 
 
 # =========================
-# Run
+# 啟動
 # =========================
 if __name__ == "__main__":
+    try:
+        ensure_db_ready()
+    except Exception as e:
+        log("START INIT_DB ERROR:", repr(e))
+
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
