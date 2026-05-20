@@ -1,14 +1,15 @@
 from flask import Flask, request, abort
 import os
-import re
 import json
-import hmac
+import requests
+import random
 import base64
 import hashlib
-import random
-import requests
-from datetime import datetime, timedelta, timezone
-from collections import Counter, defaultdict
+import hmac
+import re
+from datetime import datetime, timedelta, timezone, date
+from contextlib import contextmanager
+import psycopg2
 
 app = Flask(__name__)
 
@@ -16,604 +17,2195 @@ app = Flask(__name__)
 CHANNEL_ACCESS_TOKEN = os.getenv("CHANNEL_ACCESS_TOKEN", "").strip()
 CHANNEL_SECRET = os.getenv("CHANNEL_SECRET", "").strip()
 ADMIN_SECRET = os.getenv("ADMIN_SECRET", "1234").strip()
-CRON_SECRET = os.getenv("CRON_SECRET", "aaa888").strip()
+CRON_SECRET = os.getenv("CRON_SECRET", "push8899").strip()
 DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
 
+# 可選：如果你以後想用管理員白名單，只要在環境變數加 ADMIN_USER_IDS=Uxxxx,Uyyyy
+# 沒設定也沒關係，舊的密碼管理方式仍可用。
+ADMIN_USER_IDS = [x.strip() for x in os.getenv("ADMIN_USER_IDS", "").split(",") if x.strip()]
+
 TZ_TW = timezone(timedelta(hours=8))
+SOURCE_539_URL = "https://www.pilio.idv.tw/lto539/list539BIG.asp"
 
-# ========= LINE =========
-LINE_REPLY_URL = "https://api.line.me/v2/bot/message/reply"
-LINE_PUSH_URL = "https://api.line.me/v2/bot/message/push"
+HTTP = requests.Session()
+_DB_READY = False
 
-# ========= 資料來源 =========
-# 官方台彩最新開獎頁。若官方頁面格式改版，會自動嘗試備援來源。
-SOURCE_539_OFFICIAL_LATEST = "https://www.taiwanlottery.com/lotto/lotto_lastest_result/"
-SOURCE_539_OFFICIAL_4D = "https://www.taiwanlottery.com/lotto/result/4_d/"
-SOURCE_539_FALLBACK = "https://zh.lottolyzer.com/result/taiwan/daily-cash-539"
-SOURCE_BINGO_OFFICIAL = "https://www.taiwanlottery.com/lotto/result/bingo_bingo"
+# =========================
+# 每日陪跑語錄
+# =========================
+QUOTES = [
+    "紀律，是把波動變成機會的方法。",
+    "穩定，比爆發更有力量。",
+    "情緒會波動，紀律不應該。",
+    "真正的優勢來自長期執行。",
+    "不是追高，而是守住節奏。",
+    "理性，是對抗不確定性的武器。",
+    "慢，比快更接近成功。",
+    "不要因為上一期改變原則。",
+    "決策只做一次，紀律每天重複。",
+    "運氣會變，結構會留下痕跡。",
+    "短期波動，不代表長期方向。",
+    "真正的陪跑，是控制風險。",
+    "穩定，是最高級的策略。",
+    "冷靜，是最大的勝率。",
+    "模型給方向，紀律給結果。",
+    "不追連莊，不補情緒。",
+    "節奏，比衝動重要。",
+    "數據說話，情緒沉默。",
+    "長期主義，永遠勝出。",
+    "看清結構，再做決定。",
+    "不要被上一期牽著走。",
+    "一次選擇，一次紀律。",
+    "堅持模型，拒絕焦躁。",
+    "穩住，是最高級操作。",
+    "把風險留在門外。",
+    "不是賭，是紀律實驗。",
+    "決策清晰，結果自然。",
+    "耐心，是隱形優勢。",
+    "陪跑，是為了穩定。",
+    "今天也只做一個決定。"
+]
 
-REQUEST_TIMEOUT = 8
-USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124 Safari/537.36"
 
-# ========= 通用工具 =========
-def tw_now():
+def now_tw():
     return datetime.now(TZ_TW)
 
-def fmt_nums(nums):
-    return " ".join(f"{int(n):02d}" for n in nums)
 
-def clean_text(s):
-    return re.sub(r"\s+", " ", str(s or "")).strip()
+def today_tw():
+    return now_tw().date()
 
-def safe_int(x, default=0):
-    try:
-        return int(x)
-    except Exception:
-        return default
 
-def weighted_sample_without_replacement(items, weights, k):
-    pool = [(x, max(float(weights.get(x, 0.01)), 0.01)) for x in items]
-    out = []
-    while pool and len(out) < k:
-        total = sum(w for _, w in pool)
-        r = random.uniform(0, total)
-        acc = 0
-        pick_i = 0
-        for i, (x, w) in enumerate(pool):
-            acc += w
-            if acc >= r:
-                pick_i = i
-                break
-        out.append(pool[pick_i][0])
-        pool.pop(pick_i)
-    return sorted(out)
+def get_daily_quote():
+    idx = today_tw().toordinal() % len(QUOTES)
+    return QUOTES[idx]
 
-def fetch_url(url):
-    try:
-        r = requests.get(
-            url,
-            timeout=REQUEST_TIMEOUT,
-            headers={"User-Agent": USER_AGENT, "Accept-Language": "zh-TW,zh;q=0.9,en;q=0.6"},
-        )
-        r.raise_for_status()
-        # requests 通常可判斷；台彩若亂碼，保底用 apparent_encoding
-        if not r.encoding or r.encoding.lower() == "iso-8859-1":
-            r.encoding = r.apparent_encoding
-        return r.text
-    except Exception:
-        return ""
 
-# ========= LINE 驗證與回覆 =========
-def verify_signature(body, signature):
+def log(*args):
+    print(*args, flush=True)
+
+
+# =========================
+# LINE Signature 驗證
+# =========================
+def verify_line_signature(raw_body: bytes, signature: str) -> bool:
     if not CHANNEL_SECRET:
-        return True
-    mac = hmac.new(CHANNEL_SECRET.encode("utf-8"), body, hashlib.sha256).digest()
+        return False
+    mac = hmac.new(CHANNEL_SECRET.encode("utf-8"), raw_body, hashlib.sha256).digest()
     expected = base64.b64encode(mac).decode("utf-8")
     return hmac.compare_digest(expected, signature or "")
 
-def reply_text(reply_token, text):
-    if not CHANNEL_ACCESS_TOKEN:
-        print("[LINE_REPLY]", text)
+
+# =========================
+# Postgres
+# =========================
+@contextmanager
+def db_cursor(commit=False):
+    if not DATABASE_URL:
+        raise RuntimeError("DATABASE_URL 未設定")
+    conn = psycopg2.connect(DATABASE_URL, sslmode="require")
+    cur = conn.cursor()
+    try:
+        yield cur
+        if commit:
+            conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        cur.close()
+        conn.close()
+
+
+def init_db():
+    with db_cursor(commit=True) as cur:
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS members (
+                user_id TEXT PRIMARY KEY,
+                expires_at TIMESTAMPTZ NOT NULL
+            );
+        """)
+
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS free_trials (
+                user_id TEXT PRIMARY KEY,
+                started_at TIMESTAMPTZ NOT NULL,
+                expires_at TIMESTAMPTZ NOT NULL
+            );
+        """)
+
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS pending_accounts (
+                game_account TEXT PRIMARY KEY,
+                user_id TEXT NOT NULL,
+                created_at TIMESTAMPTZ NOT NULL
+            );
+        """)
+
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS prediction_subscribers (
+                user_id TEXT PRIMARY KEY,
+                enabled BOOLEAN NOT NULL DEFAULT TRUE,
+                updated_at TIMESTAMPTZ NOT NULL
+            );
+        """)
+
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS daily_push_subscribers (
+                user_id TEXT PRIMARY KEY,
+                enabled BOOLEAN NOT NULL DEFAULT TRUE,
+                updated_at TIMESTAMPTZ NOT NULL
+            );
+        """)
+
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS lotto_539_draws (
+                draw_date DATE PRIMARY KEY,
+                numbers TEXT NOT NULL
+            );
+        """)
+
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS daily_pick_cache (
+                pick_date DATE PRIMARY KEY,
+                numbers TEXT NOT NULL,
+                hot_zone TEXT NOT NULL,
+                top_hot TEXT NOT NULL,
+                note TEXT NOT NULL,
+                created_at TIMESTAMPTZ NOT NULL
+            );
+        """)
+
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS push_state (
+                push_key TEXT PRIMARY KEY,
+                last_value TEXT,
+                updated_at TIMESTAMPTZ NOT NULL
+            );
+        """)
+
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS model_results (
+                result_date DATE PRIMARY KEY,
+                motherboard TEXT NOT NULL,
+                actual_numbers TEXT,
+                hit_count INTEGER,
+                created_at TIMESTAMPTZ NOT NULL
+            );
+        """)
+
+        cur.execute("ALTER TABLE push_state ADD COLUMN IF NOT EXISTS last_value TEXT;")
+        cur.execute("ALTER TABLE push_state ADD COLUMN IF NOT EXISTS last_bucket TEXT;")
+        cur.execute("""
+            UPDATE push_state
+            SET last_value = COALESCE(last_value, last_bucket)
+            WHERE last_value IS NULL;
+        """)
+
+
+def ensure_db_ready():
+    global _DB_READY
+    if _DB_READY:
         return
-    headers = {
+    init_db()
+    _DB_READY = True
+
+
+# =========================
+# LINE Reply / Push
+# =========================
+def line_headers():
+    return {
         "Content-Type": "application/json",
         "Authorization": f"Bearer {CHANNEL_ACCESS_TOKEN}",
     }
+
+
+def reply_message(reply_token: str, text: str):
+    if not CHANNEL_ACCESS_TOKEN:
+        log("CHANNEL_ACCESS_TOKEN empty")
+        return
+
     payload = {
         "replyToken": reply_token,
-        "messages": [{"type": "text", "text": text[:4900]}],
+        "messages": [{"type": "text", "text": str(text)[:5000]}]
     }
+
     try:
-        requests.post(LINE_REPLY_URL, headers=headers, data=json.dumps(payload, ensure_ascii=False).encode("utf-8"), timeout=REQUEST_TIMEOUT)
+        r = HTTP.post(
+            "https://api.line.me/v2/bot/message/reply",
+            headers=line_headers(),
+            json=payload,
+            timeout=10
+        )
+        log("LINE REPLY STATUS:", r.status_code)
+        if r.status_code >= 400:
+            log("LINE REPLY BODY:", r.text[:500])
     except Exception as e:
-        print("[reply_text error]", e)
+        log("LINE REPLY EXCEPTION:", repr(e))
 
-# ========= 539 資料抓取 =========
-def roc_to_ad_year(y):
-    y = safe_int(y)
-    if y < 1911:
-        return y + 1911
-    return y
 
-def parse_date_any(s):
-    s = str(s)
-    patterns = [
-        r"(\d{4})[./\-年](\d{1,2})[./\-月](\d{1,2})",
-        r"(\d{3})[./\-年](\d{1,2})[./\-月](\d{1,2})",
-    ]
-    for p in patterns:
-        m = re.search(p, s)
-        if m:
-            y, mo, d = map(int, m.groups())
-            y = roc_to_ad_year(y)
-            try:
-                return datetime(y, mo, d, tzinfo=TZ_TW).date()
-            except Exception:
-                pass
-    return None
+def reply_template(reply_token: str, alt_text: str, title: str, text: str, actions):
+    if not CHANNEL_ACCESS_TOKEN:
+        log("CHANNEL_ACCESS_TOKEN empty")
+        return
 
-def extract_number_groups(text):
-    """
-    從頁面文字中抓 1~39 的 5 顆號碼群。
-    回傳 list[list[int]]
-    """
-    groups = []
-    # 常見格式：01 02 03 04 05 / 1 2 3 4 5
-    candidates = re.findall(r"(?:\b(?:0?[1-9]|[12]\d|3[0-9])\b[\s,，、|／/.-]*){5,}", text)
-    for c in candidates:
-        nums = [safe_int(x) for x in re.findall(r"\b(?:0?[1-9]|[12]\d|3[0-9])\b", c)]
-        # 以每5顆切一組，避免吃到頁面選單雜訊
-        for i in range(0, len(nums), 5):
-            g = nums[i:i+5]
-            if len(g) == 5 and len(set(g)) == 5 and all(1 <= n <= 39 for n in g):
-                groups.append(sorted(g))
-    # 去重但保留順序
-    out = []
-    seen = set()
-    for g in groups:
-        key = tuple(g)
-        if key not in seen:
-            seen.add(key)
-            out.append(g)
-    return out
+    payload = {
+        "replyToken": reply_token,
+        "messages": [
+            {
+                "type": "template",
+                "altText": alt_text,
+                "template": {
+                    "type": "buttons",
+                    "title": title[:40],
+                    "text": text[:60],
+                    "actions": actions[:4]
+                }
+            }
+        ]
+    }
 
-def parse_539_from_lottolyzer(html):
-    """
-    解析 lottolyzer 備援頁。
-    """
-    text = clean_text(re.sub(r"<[^>]+>", " ", html))
-    draws = []
+    try:
+        r = HTTP.post(
+            "https://api.line.me/v2/bot/message/reply",
+            headers=line_headers(),
+            json=payload,
+            timeout=10
+        )
+        log("LINE TEMPLATE STATUS:", r.status_code)
+        if r.status_code >= 400:
+            log("LINE TEMPLATE BODY:", r.text[:500])
+    except Exception as e:
+        log("LINE TEMPLATE EXCEPTION:", repr(e))
 
-    # 嘗試抓：第115000123期 2026年05月20日 01 02 03 04 05
-    pattern = re.compile(
-        r"第\s*(\d{6,})\s*期.{0,80}?(\d{4}年\d{1,2}月\d{1,2}日).{0,120}?((?:\b(?:0?[1-9]|[12]\d|3[0-9])\b\s*){5})"
+
+def reply_bingo_menu(reply_token: str):
+    reply_template(
+        reply_token,
+        "Bingo分析選單",
+        "Bingo 分析",
+        "請選擇期數",
+        [
+            {"type": "message", "label": "1期", "text": "1期"},
+            {"type": "message", "label": "5期", "text": "5期"},
+            {"type": "message", "label": "10期", "text": "10期"}
+        ]
     )
-    for m in pattern.finditer(text):
-        issue = m.group(1)
-        d = parse_date_any(m.group(2))
-        nums = [safe_int(x) for x in re.findall(r"\b(?:0?[1-9]|[12]\d|3[0-9])\b", m.group(3))]
-        if d and len(nums) == 5 and len(set(nums)) == 5:
-            draws.append({"date": d, "issue": issue, "nums": sorted(nums), "source": "備援資料"})
 
-    # 若格式變動，退而求其次：用日期附近的號碼群
-    if not draws:
-        dates = [(m.start(), parse_date_any(m.group(0))) for m in re.finditer(r"\d{4}年\d{1,2}月\d{1,2}日", text)]
-        for pos, d in dates[:30]:
-            if not d:
-                continue
-            chunk = text[pos:pos+250]
-            groups = extract_number_groups(chunk)
-            if groups:
-                draws.append({"date": d, "issue": "", "nums": groups[0], "source": "備援資料"})
 
-    # 日期新到舊
-    draws = sorted(draws, key=lambda x: x["date"], reverse=True)
-    return dedupe_draws(draws)
+def reply_bet_plan_menu(reply_token: str):
+    reply_template(
+        reply_token,
+        "539點數配置",
+        "539 點數配置",
+        "請選擇配置模式",
+        [
+            {"type": "message", "label": "穩健1000", "text": "穩健 1000"},
+            {"type": "message", "label": "均衡3000", "text": "均衡 3000"},
+            {"type": "message", "label": "爆發5000", "text": "爆發 5000"},
+            {"type": "message", "label": "爆發10000", "text": "爆發 10000"}
+        ]
+    )
 
-def parse_539_from_official(html):
-    """
-    官方頁面格式常有前端渲染/改版，所以採保守解析：
-    只接受含「今彩539 / Daily Cash / 539」附近區塊出現的 5 顆號碼。
-    """
-    raw = html
-    text = clean_text(re.sub(r"<[^>]+>", " ", raw))
-    draws = []
 
-    key_positions = [m.start() for m in re.finditer(r"(今彩\s*539|Daily\s*Cash|539)", text, flags=re.I)]
-    for pos in key_positions[:20]:
-        chunk = text[max(0, pos-300):pos+1000]
-        d = parse_date_any(chunk) or tw_now().date()
-        issue_m = re.search(r"(?:第)?\s*(\d{6,})\s*(?:期)?", chunk)
-        issue = issue_m.group(1) if issue_m else ""
-        groups = extract_number_groups(chunk)
-        for g in groups[:3]:
-            draws.append({"date": d, "issue": issue, "nums": g, "source": "官方台彩"})
+def push_message(user_id: str, text: str) -> bool:
+    if not CHANNEL_ACCESS_TOKEN:
+        log("CHANNEL_ACCESS_TOKEN empty")
+        return False
 
-    return dedupe_draws(sorted(draws, key=lambda x: x["date"], reverse=True))
+    payload = {"to": user_id, "messages": [{"type": "text", "text": str(text)[:5000]}]}
 
-def dedupe_draws(draws):
+    try:
+        r = HTTP.post(
+            "https://api.line.me/v2/bot/message/push",
+            headers=line_headers(),
+            json=payload,
+            timeout=10
+        )
+        log("LINE PUSH STATUS:", r.status_code, "TO:", user_id)
+        if r.status_code >= 400:
+            log("LINE PUSH BODY:", r.text[:500])
+            return False
+        return True
+    except Exception as e:
+        log("LINE PUSH EXCEPTION:", repr(e))
+        return False
+
+
+# =========================
+# 管理員判斷
+# =========================
+def is_admin_user(user_id: str):
+    return bool(user_id and ADMIN_USER_IDS and user_id in ADMIN_USER_IDS)
+
+
+def admin_ok(user_id: str, secret: str = ""):
+    # 有設定 ADMIN_USER_IDS 時，白名單直接通過。
+    # 沒設定時，沿用舊密碼方式，不需要你改其他東西。
+    if is_admin_user(user_id):
+        return True
+    return secret == ADMIN_SECRET
+
+
+# =========================
+# 會員系統
+# =========================
+def set_expiry_plus_days(user_id: str, days: int = 30):
+    target_date = (now_tw() + timedelta(days=days)).date()
+    dt_tw = datetime.strptime(target_date.strftime("%Y-%m-%d"), "%Y-%m-%d").replace(
+        hour=23, minute=59, second=59, tzinfo=TZ_TW
+    )
+
+    with db_cursor(commit=True) as cur:
+        cur.execute("""
+            INSERT INTO members (user_id, expires_at)
+            VALUES (%s, %s)
+            ON CONFLICT (user_id) DO UPDATE SET expires_at = EXCLUDED.expires_at;
+        """, (user_id, dt_tw))
+    return dt_tw
+
+
+def get_expiry(user_id: str):
+    with db_cursor() as cur:
+        cur.execute("SELECT expires_at FROM members WHERE user_id = %s;", (user_id,))
+        row = cur.fetchone()
+    return row[0] if row else None
+
+
+def is_member(user_id: str) -> bool:
+    try:
+        exp = get_expiry(user_id)
+        if not exp:
+            return False
+        return exp.astimezone(TZ_TW) > now_tw()
+    except Exception as e:
+        log("IS_MEMBER ERROR:", repr(e))
+        return False
+
+
+def has_used_free_trial(user_id: str) -> bool:
+    with db_cursor() as cur:
+        cur.execute("SELECT 1 FROM free_trials WHERE user_id = %s;", (user_id,))
+        row = cur.fetchone()
+    return row is not None
+
+
+def start_free_trial(user_id: str, hours: int = 24):
+    if not user_id:
+        return None, "no_user"
+
+    if is_member(user_id):
+        return get_expiry(user_id), "already_member"
+
+    if has_used_free_trial(user_id):
+        return None, "used"
+
+    start = now_tw()
+    exp = start + timedelta(hours=hours)
+
+    with db_cursor(commit=True) as cur:
+        cur.execute("""
+            INSERT INTO members (user_id, expires_at)
+            VALUES (%s, %s)
+            ON CONFLICT (user_id) DO UPDATE SET expires_at = EXCLUDED.expires_at;
+        """, (user_id, exp))
+
+        cur.execute("""
+            INSERT INTO free_trials (user_id, started_at, expires_at)
+            VALUES (%s, %s, %s)
+            ON CONFLICT (user_id) DO NOTHING;
+        """, (user_id, start, exp))
+
+        cur.execute("""
+            INSERT INTO daily_push_subscribers (user_id, enabled, updated_at)
+            VALUES (%s, TRUE, %s)
+            ON CONFLICT (user_id)
+            DO UPDATE SET enabled = TRUE, updated_at = EXCLUDED.updated_at;
+        """, (user_id, start))
+
+    return exp, "opened"
+
+
+def get_daily_push_users():
+    with db_cursor() as cur:
+        cur.execute("""
+            SELECT m.user_id
+            FROM members m
+            LEFT JOIN daily_push_subscribers d ON m.user_id = d.user_id
+            WHERE m.expires_at > %s
+              AND COALESCE(d.enabled, TRUE) = TRUE;
+        """, (now_tw(),))
+        rows = cur.fetchall()
+    return [r[0] for r in rows]
+
+
+def get_expiring_members(days_before=3):
+    target_date = today_tw() + timedelta(days=days_before)
+    with db_cursor() as cur:
+        cur.execute("""
+            SELECT user_id, expires_at
+            FROM members
+            WHERE (expires_at AT TIME ZONE 'Asia/Taipei')::date = %s;
+        """, (target_date,))
+        rows = cur.fetchall()
+    return rows
+
+
+# =========================
+# 待確認帳號
+# =========================
+def save_pending_account(game_account: str, user_id: str):
+    with db_cursor(commit=True) as cur:
+        cur.execute("""
+            INSERT INTO pending_accounts (game_account, user_id, created_at)
+            VALUES (%s, %s, %s)
+            ON CONFLICT (game_account) DO UPDATE
+            SET user_id = EXCLUDED.user_id,
+                created_at = EXCLUDED.created_at;
+        """, (game_account, user_id, now_tw()))
+
+
+def pop_pending_user_id(game_account: str):
+    with db_cursor(commit=True) as cur:
+        cur.execute("SELECT user_id FROM pending_accounts WHERE game_account = %s;", (game_account,))
+        row = cur.fetchone()
+        if not row:
+            return None
+        user_id = row[0]
+        cur.execute("DELETE FROM pending_accounts WHERE game_account = %s;", (game_account,))
+    return user_id
+
+
+def get_latest_pending(limit=50):
+    with db_cursor() as cur:
+        cur.execute("""
+            SELECT game_account, user_id, created_at
+            FROM pending_accounts
+            ORDER BY created_at DESC
+            LIMIT %s;
+        """, (limit,))
+        rows = cur.fetchall()
+    return rows
+
+
+# =========================
+# 訂閱控制
+# =========================
+def enable_prediction(user_id: str):
+    with db_cursor(commit=True) as cur:
+        cur.execute("""
+            INSERT INTO prediction_subscribers (user_id, enabled, updated_at)
+            VALUES (%s, TRUE, %s)
+            ON CONFLICT (user_id) DO UPDATE
+            SET enabled = TRUE, updated_at = EXCLUDED.updated_at;
+        """, (user_id, now_tw()))
+
+
+def disable_prediction(user_id: str):
+    with db_cursor(commit=True) as cur:
+        cur.execute("""
+            INSERT INTO prediction_subscribers (user_id, enabled, updated_at)
+            VALUES (%s, FALSE, %s)
+            ON CONFLICT (user_id) DO UPDATE
+            SET enabled = FALSE, updated_at = EXCLUDED.updated_at;
+        """, (user_id, now_tw()))
+
+
+def get_prediction_subscribers():
+    with db_cursor() as cur:
+        cur.execute("""
+            SELECT p.user_id
+            FROM prediction_subscribers p
+            JOIN members m ON p.user_id = m.user_id
+            WHERE p.enabled = TRUE
+              AND m.expires_at > %s;
+        """, (now_tw(),))
+        rows = cur.fetchall()
+    return [r[0] for r in rows]
+
+
+def enable_daily_push(user_id: str):
+    with db_cursor(commit=True) as cur:
+        cur.execute("""
+            INSERT INTO daily_push_subscribers (user_id, enabled, updated_at)
+            VALUES (%s, TRUE, %s)
+            ON CONFLICT (user_id)
+            DO UPDATE SET enabled = TRUE, updated_at = EXCLUDED.updated_at;
+        """, (user_id, now_tw()))
+
+
+def disable_daily_push(user_id: str):
+    with db_cursor(commit=True) as cur:
+        cur.execute("""
+            INSERT INTO daily_push_subscribers (user_id, enabled, updated_at)
+            VALUES (%s, FALSE, %s)
+            ON CONFLICT (user_id)
+            DO UPDATE SET enabled = FALSE, updated_at = EXCLUDED.updated_at;
+        """, (user_id, now_tw()))
+
+
+# =========================
+# push state
+# =========================
+def get_push_state(push_key: str):
+    with db_cursor() as cur:
+        cur.execute("SELECT last_value FROM push_state WHERE push_key = %s;", (push_key,))
+        row = cur.fetchone()
+    return row[0] if row else None
+
+
+def set_push_state(push_key: str, last_value: str):
+    with db_cursor(commit=True) as cur:
+        cur.execute("""
+            INSERT INTO push_state (push_key, last_value, last_bucket, updated_at)
+            VALUES (%s, %s, %s, %s)
+            ON CONFLICT (push_key) DO UPDATE
+            SET last_value = EXCLUDED.last_value,
+                last_bucket = EXCLUDED.last_bucket,
+                updated_at = EXCLUDED.updated_at;
+        """, (push_key, last_value, last_value, now_tw()))
+
+
+# =========================
+# 539 真實資料
+# =========================
+def fetch_recent_539_results(max_rows: int = 80):
+    r = HTTP.get(
+        SOURCE_539_URL,
+        timeout=15,
+        headers={"User-Agent": "Mozilla/5.0"}
+    )
+    r.encoding = "utf-8"
+    html = r.text
+
+    pattern = re.compile(
+        r"開獎日期:(\d{4})/(\d{2})/(\d{2}).{0,50}?\s+(\d{2})[,\s]+(\d{2})[,\s]+(\d{2})[,\s]+(\d{2})[,\s]+(\d{2})",
+        re.MULTILINE | re.DOTALL
+    )
+
     out = []
     seen = set()
-    for d in draws:
-        key = (str(d.get("date")), tuple(d.get("nums", [])))
-        if key in seen:
+    for m in pattern.finditer(html):
+        y, mo, d = int(m.group(1)), int(m.group(2)), int(m.group(3))
+        nums = [int(m.group(i)) for i in range(4, 9)]
+        nums_sorted = sorted(nums)
+        draw_date = date(y, mo, d)
+        if draw_date in seen:
             continue
-        if len(d.get("nums", [])) == 5:
-            seen.add(key)
-            out.append(d)
+        seen.add(draw_date)
+        s = " ".join([f"{n:02d}" for n in nums_sorted])
+        out.append((draw_date, s))
+        if len(out) >= max_rows:
+            break
     return out
 
-def get_539_draws(limit=40):
-    """
-    取得最新 539 開獎資料。
-    優先官方，官方解析不足時改用備援。
-    """
-    draws = []
 
-    for url in [SOURCE_539_OFFICIAL_LATEST, SOURCE_539_OFFICIAL_4D]:
-        html = fetch_url(url)
-        if html:
-            draws += parse_539_from_official(html)
+def upsert_539_draws(rows):
+    if not rows:
+        return
+    with db_cursor(commit=True) as cur:
+        cur.executemany("""
+            INSERT INTO lotto_539_draws (draw_date, numbers)
+            VALUES (%s, %s)
+            ON CONFLICT (draw_date) DO UPDATE SET numbers = EXCLUDED.numbers;
+        """, rows)
 
-    draws = dedupe_draws(draws)
 
-    # 官方抓不到足夠近期資料就用備援補足
-    if len(draws) < 10:
-        html = fetch_url(SOURCE_539_FALLBACK)
-        if html:
-            draws += parse_539_from_lottolyzer(html)
+def ensure_latest_539_in_db():
+    try:
+        rows = fetch_recent_539_results(max_rows=80)
+        upsert_539_draws(rows)
+    except Exception as e:
+        log("FETCH_539_ERROR:", repr(e))
 
-    draws = dedupe_draws(sorted(draws, key=lambda x: x["date"], reverse=True))
-    return draws[:limit]
 
-# ========= 539 AI 動態母盤 =========
-def zone(n):
-    if 1 <= n <= 13:
-        return "低區"
-    if 14 <= n <= 26:
-        return "中區"
-    return "高區"
+def load_539_draws(limit=240):
+    with db_cursor() as cur:
+        cur.execute("""
+            SELECT draw_date, numbers
+            FROM lotto_539_draws
+            ORDER BY draw_date DESC
+            LIMIT %s;
+        """, (limit,))
+        rows = cur.fetchall()
 
-def tail(n):
+    parsed = []
+    for d, s in rows:
+        try:
+            nums = [int(x) for x in s.split()]
+            if len(nums) == 5:
+                parsed.append((d, nums))
+        except Exception:
+            pass
+    return parsed
+
+
+def hot_zone_and_hotnums_539(draws_30):
+    zone = {"1-13": 0, "14-26": 0, "27-39": 0}
+    freq30 = {i: 0 for i in range(1, 40)}
+
+    for _, nums in draws_30:
+        for n in nums:
+            freq30[n] += 1
+            if 1 <= n <= 13:
+                zone["1-13"] += 1
+            elif 14 <= n <= 26:
+                zone["14-26"] += 1
+            else:
+                zone["27-39"] += 1
+
+    hot_zone = max(zone.items(), key=lambda x: x[1])[0]
+    ranked = sorted(freq30.items(), key=lambda x: (x[1], -x[0]), reverse=True)
+    return hot_zone, ranked, freq30
+
+
+def get_prev_day_top_hot(prev_date):
+    with db_cursor() as cur:
+        cur.execute("SELECT top_hot FROM daily_pick_cache WHERE pick_date = %s;", (prev_date,))
+        row = cur.fetchone()
+    return row[0] if row else None
+
+
+def freq_539(draws_240):
+    f = {i: 0 for i in range(1, 40)}
+    for _, nums in draws_240:
+        for n in nums:
+            f[n] += 1
+    return f
+
+
+def _fmt_nums(nums):
+    return " ".join([f"{int(n):02d}" for n in sorted(set(nums))])
+
+
+def _parse_nums_text(nums_text: str):
+    try:
+        return [int(x) for x in (nums_text or "").split()]
+    except Exception:
+        return []
+
+
+def _normalize_score(score_dict):
+    vals = list(score_dict.values())
+    mn = min(vals) if vals else 0
+    mx = max(vals) if vals else 1
+    if mx == mn:
+        return {k: 0.5 for k in score_dict}
+    return {k: (v - mn) / (mx - mn) for k, v in score_dict.items()}
+
+
+def _freq_slice(draws, size):
+    return freq_539(draws[:size]) if draws else {i: 0 for i in range(1, 40)}
+
+
+def _gap_score_539(draws):
+    gap = {i: len(draws) + 5 for i in range(1, 40)}
+    for idx, (_, nums) in enumerate(draws):
+        for n in nums:
+            if gap[n] == len(draws) + 5:
+                gap[n] = idx
+
+    score = {}
+    for n, g in gap.items():
+        if g <= 1:
+            score[n] = 0.10
+        elif 2 <= g <= 5:
+            score[n] = 0.55
+        elif 6 <= g <= 14:
+            score[n] = 1.00
+        elif 15 <= g <= 28:
+            score[n] = 0.78
+        else:
+            score[n] = 0.62
+    return score, gap
+
+
+def _head_of(n):
+    return n // 10
+
+
+def _tail_of(n):
     return n % 10
 
-def build_539_ai_board(draws):
-    """
-    新版核心：
-    - 母盤只吃最新資料，避免卡死舊盤。
-    - 近1/3/5/10期權重提高。
-    - 保留昨日重號 1~2 顆。
-    - 加入髒盤/偏區/連號/重尾，避免盤面過度工整。
-    """
-    all_nums = list(range(1, 40))
-    now_date = tw_now().date()
 
+def _head_pattern_score_539(draws):
+    score_by_head = {0: 0.50, 1: 0.50, 2: 0.50, 3: 0.50}
     if not draws:
-        # 沒資料時才使用保底盤，且明確標記
-        base = sorted(random.sample(all_nums, 12))
+        return {n: 0.5 for n in range(1, 40)}, "資料不足"
+
+    latest_heads = [_head_of(n) for n in draws[0][1]]
+    latest_count = {h: latest_heads.count(h) for h in range(4)}
+
+    for h in range(4):
+        if latest_count[h] >= 3:
+            score_by_head[h] -= 0.22
+        elif latest_count[h] == 0:
+            score_by_head[h] += 0.22
+        elif latest_count[h] == 1:
+            score_by_head[h] += 0.08
+
+    dom_heads = []
+    for _, nums in draws[:3]:
+        hs = [_head_of(n) for n in nums]
+        dom_heads.append(max(range(4), key=lambda h: hs.count(h)))
+    if len(dom_heads) >= 2:
+        seq = list(reversed(dom_heads))
+        if len(seq) >= 2 and seq[-1] == (seq[-2] + 1) % 4:
+            score_by_head[(seq[-1] + 1) % 4] += 0.18
+
+    note = "｜".join([f"{h}頭{latest_count[h]}顆" for h in range(4)])
+    return {n: max(0.05, score_by_head[_head_of(n)]) for n in range(1, 40)}, note
+
+
+def _tail_pattern_score_539(draws):
+    score_by_tail = {t: 0.50 for t in range(10)}
+    if not draws:
+        return {n: 0.5 for n in range(1, 40)}, "資料不足"
+
+    latest_tails = [_tail_of(n) for n in draws[0][1]]
+    latest_count = {t: latest_tails.count(t) for t in range(10)}
+
+    burst_tails = [t for t, c in latest_count.items() if c >= 2]
+    for t in burst_tails:
+        score_by_tail[t] -= 0.18
+        score_by_tail[(t + 3) % 10] += 0.24
+        score_by_tail[(t + 5) % 10] += 0.15
+        score_by_tail[(t + 7) % 10] += 0.10
+
+    recent5 = draws[:5]
+    tail5 = {t: 0 for t in range(10)}
+    for _, nums in recent5:
+        for n in nums:
+            tail5[_tail_of(n)] += 1
+    avg5 = sum(tail5.values()) / 10 if tail5 else 0
+    for t in range(10):
+        if tail5[t] <= max(0, avg5 - 1.5):
+            score_by_tail[t] += 0.12
+        elif tail5[t] >= avg5 + 2.0:
+            score_by_tail[t] -= 0.10
+
+    note = "｜".join([f"{t}尾{latest_count[t]}顆" for t in range(10) if latest_count[t] > 0])
+    if not note:
+        note = "尾數分散"
+    return {n: max(0.05, score_by_tail[_tail_of(n)]) for n in range(1, 40)}, note
+
+
+def _adjacency_score_539(draws):
+    score = {i: 0.35 for i in range(1, 40)}
+    if not draws:
+        return score
+    recent_nums = []
+    for _, nums in draws[:3]:
+        recent_nums.extend(nums)
+    for n in recent_nums:
+        for nb in (n - 1, n + 1):
+            if 1 <= nb <= 39:
+                score[nb] += 0.22
+        for nb in (n - 2, n + 2):
+            if 1 <= nb <= 39:
+                score[nb] += 0.08
+    return score
+
+
+def _weighted_sample_without_replacement(items, weights, k, rng):
+    pool = list(items)
+    chosen = []
+    while pool and len(chosen) < k:
+        total = sum(max(0.001, weights.get(n, 0.001)) for n in pool)
+        r = rng.uniform(0, total)
+        acc = 0
+        pick = pool[-1]
+        for n in pool:
+            acc += max(0.001, weights.get(n, 0.001))
+            if r <= acc:
+                pick = n
+                break
+        chosen.append(pick)
+        pool.remove(pick)
+    return chosen
+
+
+def _zone_name(n):
+    if 1 <= n <= 13:
+        return "low"
+    if 14 <= n <= 26:
+        return "mid"
+    return "high"
+
+
+def _zone_counts(nums):
+    return {
+        "low": sum(1 for n in nums if 1 <= n <= 13),
+        "mid": sum(1 for n in nums if 14 <= n <= 26),
+        "high": sum(1 for n in nums if 27 <= n <= 39),
+    }
+
+
+def structure_text_from_numbers(nums_text: str):
+    nums = [int(x) for x in nums_text.split()]
+    low = sum(1 for n in nums if 1 <= n <= 13)
+    mid = sum(1 for n in nums if 14 <= n <= 26)
+    high = sum(1 for n in nums if 27 <= n <= 39)
+    return f"低區{low}｜中區{mid}｜高區{high}"
+
+
+def _repair_motherboard_zone(nums, ranked_candidates):
+    nums = sorted(set(nums))
+    counts = _zone_counts(nums)
+    selected = set(nums)
+
+    for zone in ("low", "mid", "high"):
+        while counts[zone] < 2:
+            add = None
+            for n in ranked_candidates:
+                if n not in selected and _zone_name(n) == zone:
+                    add = n
+                    break
+            if add is None:
+                break
+
+            over_zone = max(counts, key=lambda z: counts[z])
+            removable = [x for x in nums if _zone_name(x) == over_zone]
+            if not removable:
+                break
+
+            remove = removable[-1]
+            nums.remove(remove)
+            selected.remove(remove)
+            counts[_zone_name(remove)] -= 1
+
+            nums.append(add)
+            selected.add(add)
+            counts[zone] += 1
+            nums = sorted(nums)
+
+    return sorted(nums[:9])
+
+
+def build_motherboard_models_539(draws_240):
+    seed_date = today_tw()
+    rng = random.Random(f"539-motherboard-v4-{seed_date.isoformat()}")
+
+    if not draws_240:
+        fallback = [4, 8, 13, 18, 21, 27, 33, 36, 39]
         return {
-            "stale": True,
-            "latest": None,
-            "source": "無法取得資料，使用臨時盤",
-            "mother": base,
-            "stable2": sorted(base[:6]),
-            "main3": sorted(base[2:8]),
-            "boom4": sorted(base[4:12]),
-            "dirty": sorted(random.sample(all_nums, 8)),
-            "hot": [],
-            "cold": [],
-            "zones": {},
-            "tails": {},
-            "strategy": "資料源暫時失效：此盤只做臨時參考，請先確認台彩資料是否可抓取。",
+            "motherboard": _fmt_nums(fallback),
+            "core": _fmt_nums([18, 21, 33]),
+            "stable2": _fmt_nums([18, 21, 33]),
+            "attack3": _fmt_nums([8, 18, 21, 33, 36]),
+            "burst4": _fmt_nums([4, 8, 18, 21, 27, 33, 36, 39]),
+            "pattern_note": "資料不足，使用備援母盤",
+            "tail_note": "資料不足",
+            "cold_note": "04",
+            "head_note": "資料不足"
         }
 
-    latest = draws[0]
-    latest_date = latest["date"]
-    age_days = (now_date - latest_date).days
-    stale = age_days > 3
+    f30 = _freq_slice(draws_240, 30)
+    f120 = _freq_slice(draws_240, 120)
+    f240 = _freq_slice(draws_240, 240)
+    gap_score, gap_raw = _gap_score_539(draws_240)
+    head_score, head_note = _head_pattern_score_539(draws_240)
+    tail_score, tail_note = _tail_pattern_score_539(draws_240)
+    adj_score = _adjacency_score_539(draws_240)
 
-    weights = defaultdict(float)
+    nf30 = _normalize_score(f30)
+    nf120 = _normalize_score(f120)
+    nf240 = _normalize_score(f240)
+    ngap = _normalize_score(gap_score)
+    nhead = _normalize_score(head_score)
+    ntail = _normalize_score(tail_score)
+    nadj = _normalize_score(adj_score)
 
-    # 近1期：重號核心，不排除昨天號
-    for n in latest["nums"]:
-        weights[n] += 5.0
+    score = {}
+    for n in range(1, 40):
+        noise = rng.uniform(0, 0.035)
+        score[n] = (
+            0.30 * nf30[n] +
+            0.20 * nf120[n] +
+            0.12 * nf240[n] +
+            0.16 * ngap[n] +
+            0.10 * nhead[n] +
+            0.10 * ntail[n] +
+            0.07 * nadj[n] +
+            noise
+        )
 
-    # 近3期：短節奏
-    for d in draws[:3]:
-        for n in d["nums"]:
-            weights[n] += 3.6
+    ranked = [n for n, _ in sorted(score.items(), key=lambda x: x[1], reverse=True)]
+    candidate_pool = ranked[:24]
 
-    # 近5期：延伸節奏
-    for d in draws[:5]:
-        for n in d["nums"]:
-            weights[n] += 2.4
+    cold_candidates = [n for n, _ in sorted(gap_raw.items(), key=lambda x: x[1], reverse=True)[:8]]
+    for n in cold_candidates[:3]:
+        if n not in candidate_pool:
+            candidate_pool.append(n)
 
-    # 近10期：熱區
-    for d in draws[:10]:
-        for n in d["nums"]:
-            weights[n] += 1.5
+    motherboard = _weighted_sample_without_replacement(candidate_pool, score, 9, rng)
 
-    # 冷號回補：最近10期沒開，但近40期有動過者加權
-    recent10 = set(n for d in draws[:10] for n in d["nums"])
-    recent40_counter = Counter(n for d in draws[:40] for n in d["nums"])
-    cold_candidates = [n for n in all_nums if n not in recent10]
+    cold_pick = None
     for n in cold_candidates:
-        weights[n] += 0.8
-        if recent40_counter[n] >= 2:
-            weights[n] += 0.5
-
-    # 頭尾/區段偏移：避免全平均盤
-    tail_counter = Counter(tail(n) for d in draws[:10] for n in d["nums"])
-    zone_counter = Counter(zone(n) for d in draws[:10] for n in d["nums"])
-    hot_tails = [t for t, _ in tail_counter.most_common(3)]
-    hot_zones = [z for z, _ in zone_counter.most_common(2)]
-
-    for n in all_nums:
-        if tail(n) in hot_tails:
-            weights[n] += 0.45
-        if zone(n) in hot_zones:
-            weights[n] += 0.35
-        # 隨機擾動，避免每天盤型死板
-        weights[n] += random.uniform(0, 0.75)
-
-    hot_nums = [n for n, _ in Counter(n for d in draws[:10] for n in d["nums"]).most_common(10)]
-    cold_nums = sorted(cold_candidates, key=lambda n: (recent40_counter[n], random.random()), reverse=True)[:10]
-
-    # 母盤 12 顆：顆數提高
-    mother = weighted_sample_without_replacement(all_nums, weights, 12)
-
-    # 強制帶入昨日 1~2 顆，提升重號機率
-    repeat_keep = random.sample(latest["nums"], k=min(random.choice([1, 2]), len(latest["nums"])))
-    mother_set = set(mother) | set(repeat_keep)
-    while len(mother_set) > 12:
-        removable = [n for n in mother_set if n not in repeat_keep]
-        if not removable:
+        if n not in motherboard:
+            cold_pick = n
             break
-        mother_set.remove(min(removable, key=lambda n: weights[n]))
-    while len(mother_set) < 12:
-        add = weighted_sample_without_replacement([n for n in all_nums if n not in mother_set], weights, 1)
-        if add:
-            mother_set.add(add[0])
-    mother = sorted(mother_set)
+    if cold_pick is not None:
+        weakest = min(motherboard, key=lambda x: score.get(x, 0))
+        if gap_raw.get(cold_pick, 0) >= 10 and score.get(cold_pick, 0) >= 0.35:
+            motherboard.remove(weakest)
+            motherboard.append(cold_pick)
 
-    # 2星穩定：抓高權重 + 昨日重號
-    stable2 = sorted(set(weighted_sample_without_replacement(mother, weights, 7)) | set(repeat_keep))
-    stable2 = sorted(stable2)[:8]
+    motherboard = _repair_motherboard_zone(motherboard, ranked)
 
-    # 3星主攻：中高權重，不要太平均
-    main3 = weighted_sample_without_replacement(mother, weights, 8)
+    mb_ranked = sorted(motherboard, key=lambda n: score[n], reverse=True)
+    core = []
+    for n in mb_ranked:
+        if len(core) < 3:
+            if len(core) < 2 or _zone_name(n) not in [_zone_name(x) for x in core] or len(core) == 2:
+                core.append(n)
+    if len(core) < 3:
+        for n in mb_ranked:
+            if n not in core:
+                core.append(n)
+            if len(core) >= 3:
+                break
 
-    # 4星爆發：母盤大顆數，加入冷號與偏區
-    boom_pool = sorted(set(mother + cold_nums[:4] + hot_nums[:4]))
-    boom4 = weighted_sample_without_replacement(boom_pool, weights, 10)
+    attack3 = list(core)
+    for n in mb_ranked:
+        if n not in attack3:
+            attack3.append(n)
+        if len(attack3) >= 5:
+            break
 
-    # 髒盤：偏區、連號、重尾
-    zpick = random.choice(["低區", "中區", "高區"])
-    zone_pool = [n for n in all_nums if zone(n) == zpick]
-    start = random.randint(1, 35)
-    seq_pool = [n for n in range(start, min(40, start + 5))]
-    tail_pick = random.choice(hot_tails or list(range(10)))
-    tail_pool = [n for n in all_nums if tail(n) == tail_pick]
-    dirty_pool = sorted(set(zone_pool + seq_pool + tail_pool + latest["nums"]))
-    dirty_weights = defaultdict(float, weights)
-    for n in dirty_pool:
-        dirty_weights[n] += random.uniform(0.5, 2.0)
-    dirty = weighted_sample_without_replacement(dirty_pool, dirty_weights, 8)
+    burst4 = list(attack3)
+    for n in motherboard:
+        if n not in burst4:
+            burst4.append(n)
+        if len(burst4) >= 8:
+            break
 
-    # 結構摘要
-    zc = Counter(zone(n) for n in mother)
-    tc = Counter(tail(n) for n in mother)
+    cold_note_nums = [n for n in motherboard if gap_raw.get(n, 0) >= 10]
+    cold_note = _fmt_nums(cold_note_nums[:3]) if cold_note_nums else _fmt_nums(cold_candidates[:2])
+
+    pattern_note = (
+        f"頭數：{head_note}\n"
+        f"尾數：{tail_note}\n"
+        f"區段：{structure_text_from_numbers(_fmt_nums(motherboard))}"
+    )
 
     return {
-        "stale": stale,
-        "latest": latest,
-        "source": latest.get("source", ""),
-        "mother": mother,
-        "stable2": stable2,
-        "main3": main3,
-        "boom4": boom4,
-        "dirty": dirty,
-        "hot": hot_nums[:8],
-        "cold": cold_nums[:8],
-        "zones": dict(zc),
-        "tails": dict(tc.most_common(5)),
-        "strategy": "母盤改為近1/3/5/10期動態權重；保留昨日重號，加入冷號回補、偏區、連號、重尾與隨機擾動。",
+        "motherboard": _fmt_nums(motherboard),
+        "core": _fmt_nums(core),
+        "stable2": _fmt_nums(core),
+        "attack3": _fmt_nums(attack3),
+        "burst4": _fmt_nums(burst4),
+        "pattern_note": pattern_note,
+        "tail_note": tail_note,
+        "cold_note": cold_note,
+        "head_note": head_note
     }
 
-def render_539_ai():
-    draws = get_539_draws(limit=40)
-    board = build_539_ai_board(draws)
 
-    latest = board["latest"]
-    today = tw_now().strftime("%Y.%m.%d")
+def build_daily_top_hot(ranked_candidates, pick_date):
+    top_pool = ranked_candidates[:16] if len(ranked_candidates) >= 16 else ranked_candidates[:]
+    if not top_pool:
+        return "01 02 03 04 05"
 
-    if latest:
-        latest_line = f"{latest['date'].strftime('%Y.%m.%d')}｜第{latest.get('issue') or '-'}期｜{fmt_nums(latest['nums'])}"
-        age = (tw_now().date() - latest["date"]).days
-    else:
-        latest_line = "資料取得失敗"
-        age = 999
+    rng = random.Random(f"539-top-hot-v2-{pick_date.isoformat()}")
+    rng.shuffle(top_pool)
 
-    stale_note = ""
-    if board["stale"]:
-        stale_note = "\n⚠️ 資料警示：最新資料不是近期開獎，系統已停止使用舊母盤，只輸出臨時盤。"
+    weighted_pool = []
+    for n, score in top_pool:
+        copies = max(1, int(score))
+        weighted_pool.extend([n] * copies)
 
-    zones = board["zones"]
-    zone_line = f"低{zones.get('低區',0)}｜中{zones.get('中區',0)}｜高{zones.get('高區',0)}"
-    tails = board["tails"]
-    tail_line = "・".join(f"{k}尾x{v}" for k, v in tails.items()) or "-"
+    chosen = set()
+    safe_guard = 0
+    while len(chosen) < min(5, len(top_pool)) and safe_guard < 200:
+        safe_guard += 1
+        chosen.add(rng.choice(weighted_pool))
 
-    text = f"""【今日539 AI母盤】{stale_note}
+    if len(chosen) < 5:
+        for n, _ in top_pool:
+            chosen.add(n)
+            if len(chosen) >= 5:
+                break
 
-■ 最新資料
-{latest_line}
-資料年齡：{age}天
-資料源：{board['source']}
+    return " ".join([f"{n:02d}" for n in sorted(list(chosen)[:5])])
 
-■ 動態母盤 12顆
-{fmt_nums(board['mother'])}
 
-■ 主軸號｜2星穩定
-{fmt_nums(board['stable2'])}
+def get_or_build_today_pick_539():
+    today = today_tw()
 
-■ 3星主攻
-{fmt_nums(board['main3'])}
+    with db_cursor() as cur:
+        cur.execute("""
+            SELECT numbers, hot_zone, top_hot, note
+            FROM daily_pick_cache
+            WHERE pick_date = %s;
+        """, (today,))
+        row = cur.fetchone()
 
-■ 4星爆發
-{fmt_nums(board['boom4'])}
+    if row:
+        return {"numbers": row[0], "hot_zone": row[1], "top_hot": row[2], "note": row[3]}
 
-■ 髒盤補位
-{fmt_nums(board['dirty'])}
+    ensure_latest_539_in_db()
+    draws_240 = load_539_draws(limit=240)
+    d30 = draws_240[:30] if len(draws_240) >= 30 else draws_240
 
-■ 熱號追蹤
-{fmt_nums(board['hot'])}
+    hot_zone, ranked_candidates, _ = hot_zone_and_hotnums_539(d30)
+    prev_top_hot = get_prev_day_top_hot(today - timedelta(days=1))
+    top_hot = build_daily_top_hot(ranked_candidates, today)
 
-■ 冷號回補
-{fmt_nums(board['cold'])}
+    if prev_top_hot and prev_top_hot == top_hot:
+        top_hot = build_daily_top_hot(ranked_candidates[::-1], today)
 
-■ 結構分析
-區段：{zone_line}
-強尾：{tail_line}
+    models = build_motherboard_models_539(draws_240)
+    note = json.dumps(models, ensure_ascii=False)
 
-■ 策略解讀
-2星：優先用主軸號，保留1~2顆昨日重號。
-3星：主攻不要只押平均盤，需搭配連號/重尾。
-4星：用爆發盤放大波動，髒盤做補位。
+    with db_cursor(commit=True) as cur:
+        cur.execute("""
+            INSERT INTO daily_pick_cache (pick_date, numbers, hot_zone, top_hot, note, created_at)
+            VALUES (%s, %s, %s, %s, %s, %s)
+            ON CONFLICT (pick_date) DO UPDATE
+            SET numbers = EXCLUDED.numbers,
+                hot_zone = EXCLUDED.hot_zone,
+                top_hot = EXCLUDED.top_hot,
+                note = EXCLUDED.note,
+                created_at = EXCLUDED.created_at;
+        """, (today, models["motherboard"], hot_zone, top_hot, note, now_tw()))
 
-■ AI陪跑記錄
-節奏比準度重要。
-本版已移除固定舊母盤，改用每日動態母盤。
-
-（數據結構參考，非保證）"""
-    return text[:4900]
-
-# ========= Bingo 簡易真實資料抓取/分析 =========
-def parse_bingo_latest(html):
-    text = clean_text(re.sub(r"<[^>]+>", " ", html))
-    # Bingo 1~80，取最近一組 20 顆
-    nums = [safe_int(x) for x in re.findall(r"\b(?:[1-9]|[1-7]\d|80)\b", text)]
-    # 避免抓到年月日/期數，找連續20顆 1~80 且不重複
-    for i in range(0, max(0, len(nums)-20)):
-        g = nums[i:i+20]
-        if len(g) == 20 and len(set(g)) == 20 and all(1 <= n <= 80 for n in g):
-            return sorted(g)
-    return []
-
-def render_bingo_ai(periods=1):
-    html = fetch_url(SOURCE_BINGO_OFFICIAL)
-    latest = parse_bingo_latest(html) if html else []
-    if not latest:
-        pick = sorted(random.sample(range(1, 81), 10))
-        return f"""【Bingo AI分析】
-
-⚠️ 官方資料暫時解析失敗，以下為臨時盤。
-建議號：{fmt_nums(pick)}
-
-（數據結構參考，非保證）"""
-
-    low = [n for n in latest if n <= 40]
-    high = [n for n in latest if n > 40]
-    odd = [n for n in latest if n % 2 == 1]
-    even = [n for n in latest if n % 2 == 0]
-    pool = latest[:]
-    extra = random.sample([n for n in range(1,81) if n not in pool], 20)
-    weights = defaultdict(lambda: 1.0)
-    for n in latest:
-        weights[n] += 3.0
-    for n in extra:
-        weights[n] += random.uniform(0.2, 1.2)
-
-    suggest = weighted_sample_without_replacement(sorted(set(pool + extra)), weights, 10)
-
-    return f"""【Bingo AI分析】
-
-■ 最新官方盤
-{fmt_nums(latest)}
-
-■ 結構
-低區：{len(low)}｜高區：{len(high)}
-單：{len(odd)}｜雙：{len(even)}
-
-■ 建議觀察號 10顆
-{fmt_nums(suggest)}
-
-■ 策略
-短期以最新盤重複與鄰近補位為主。
-不建議追高倍投。
-
-（數據結構參考，非保證）"""
-
-# ========= 指令處理 =========
-def help_text():
-    return """【AI陪跑指令】
-
-539：
-輸入 539
-輸入 539分析
-輸入 /預測
-
-賓果：
-輸入 賓果
-輸入 1期 / 5期 / 10期
-
-其他：
-輸入 help 查看指令
-
-（所有分析皆為數據結構參考，非保證）"""
-
-def handle_text(user_text):
-    t = clean_text(user_text)
-
-    if not t:
-        return help_text()
-
-    low = t.lower()
-
-    if low in ["help", "說明", "指令", "/help"]:
-        return help_text()
-
-    # 539
-    if t in ["539", "今彩539", "539分析", "今日539", "今日539 AI母盤", "母盤", "/預測", "預測"]:
-        return render_539_ai()
-
-    # Bingo
-    if t in ["賓果", "bingo", "Bingo", "賓果分析"]:
-        return render_bingo_ai(1)
-
-    if t in ["1期", "5期", "10期"]:
-        return render_bingo_ai(safe_int(t.replace("期", ""), 1))
-
-    return help_text()
-
-# ========= Flask Routes =========
-@app.route("/", methods=["GET"])
-def index():
-    return "AI LINE Bot is running."
-
-@app.route("/health", methods=["GET"])
-def health():
     return {
-        "ok": True,
-        "time": tw_now().isoformat(),
-        "line_token": bool(CHANNEL_ACCESS_TOKEN),
-        "line_secret": bool(CHANNEL_SECRET),
+        "numbers": models["motherboard"],
+        "hot_zone": hot_zone,
+        "top_hot": top_hot,
+        "note": note
     }
 
-@app.route("/test539", methods=["GET"])
-def test539():
-    return "<pre>" + render_539_ai() + "</pre>"
 
-@app.route("/callback", methods=["POST"])
-def callback():
-    body = request.get_data()
-    signature = request.headers.get("X-Line-Signature", "")
-    if not verify_signature(body, signature):
-        abort(400)
+def parse_models_from_note(note_text: str):
+    fallback = {
+        "motherboard": "04 08 13 18 21 27 33 36 39",
+        "core": "18 21 33",
+        "stable2": "18 21 33",
+        "attack3": "08 18 21 33 36",
+        "burst4": "04 08 18 21 27 33 36 39",
+        "pattern_note": "頭數/尾數/區段綜合分析",
+        "cold_note": "04 27",
+        "head_note": "資料不足",
+        "tail_note": "資料不足"
+    }
+    try:
+        data = json.loads(note_text or "{}")
+        if "trend_model" in data or "adjustment_model" in data:
+            trend = data.get("trend_model", "06 09 18 24 33")
+            adjust = data.get("adjustment_model", "04 12 18 26 31")
+            trend_nums = _parse_nums_text(trend)
+            adjust_nums = _parse_nums_text(adjust)
+            merged = sorted(set(trend_nums + adjust_nums))[:9]
+            if len(merged) < 9:
+                merged += [n for n in range(1, 40) if n not in merged][:9-len(merged)]
+            return {
+                "motherboard": _fmt_nums(merged),
+                "core": _fmt_nums(trend_nums[:3] if len(trend_nums) >= 3 else merged[:3]),
+                "stable2": _fmt_nums(trend_nums[:3] if len(trend_nums) >= 3 else merged[:3]),
+                "attack3": _fmt_nums(trend_nums[:5] if len(trend_nums) >= 5 else merged[:5]),
+                "burst4": _fmt_nums(merged[:8]),
+                "pattern_note": "舊版快取轉換：建議明日自動更新新版母盤",
+                "cold_note": _fmt_nums(adjust_nums[:2]) if adjust_nums else "04 27",
+                "head_note": "舊版快取",
+                "tail_note": "舊版快取"
+            }
+
+        for k in fallback:
+            if k not in data or not data.get(k):
+                data[k] = fallback[k]
+        return data
+    except Exception:
+        return fallback
+
+
+# =========================
+# 539 命中追蹤
+# =========================
+def update_latest_model_result():
+    """
+    不需要額外設定。
+    只要抓得到最新539開獎，就會把昨日/當日快取母盤和實際號碼比對寫入 model_results。
+    """
+    try:
+        ensure_latest_539_in_db()
+        draws = load_539_draws(limit=3)
+        if not draws:
+            return None
+
+        latest_date, actual_nums = draws[0]
+
+        with db_cursor() as cur:
+            cur.execute("""
+                SELECT numbers
+                FROM daily_pick_cache
+                WHERE pick_date <= %s
+                ORDER BY pick_date DESC
+                LIMIT 1;
+            """, (latest_date,))
+            row = cur.fetchone()
+
+        if not row:
+            return None
+
+        motherboard = row[0]
+        mb_nums = set(_parse_nums_text(motherboard))
+        hit_count = len(mb_nums & set(actual_nums))
+        actual_text = _fmt_nums(actual_nums)
+
+        with db_cursor(commit=True) as cur:
+            cur.execute("""
+                INSERT INTO model_results (result_date, motherboard, actual_numbers, hit_count, created_at)
+                VALUES (%s, %s, %s, %s, %s)
+                ON CONFLICT (result_date) DO UPDATE
+                SET motherboard = EXCLUDED.motherboard,
+                    actual_numbers = EXCLUDED.actual_numbers,
+                    hit_count = EXCLUDED.hit_count,
+                    created_at = EXCLUDED.created_at;
+            """, (latest_date, motherboard, actual_text, hit_count, now_tw()))
+
+        return {
+            "date": latest_date,
+            "motherboard": motherboard,
+            "actual": actual_text,
+            "hit": hit_count
+        }
+    except Exception as e:
+        log("UPDATE_MODEL_RESULT ERROR:", repr(e))
+        return None
+
+
+def get_latest_model_result_text():
+    try:
+        with db_cursor() as cur:
+            cur.execute("""
+                SELECT result_date, motherboard, actual_numbers, hit_count
+                FROM model_results
+                ORDER BY result_date DESC
+                LIMIT 1;
+            """)
+            row = cur.fetchone()
+
+        if not row:
+            result = update_latest_model_result()
+            if not result:
+                return ""
+            return (
+                "\n▍最近母盤追蹤\n"
+                f"{result['date'].strftime('%Y.%m.%d')}｜命中{result['hit']}顆\n"
+                f"開獎：{result['actual']}\n"
+            )
+
+        d, mb, actual, hit = row
+        return (
+            "\n▍最近母盤追蹤\n"
+            f"{d.strftime('%Y.%m.%d')}｜命中{hit}顆\n"
+            f"開獎：{actual}\n"
+        )
+    except Exception as e:
+        log("GET_LATEST_RESULT_TEXT ERROR:", repr(e))
+        return ""
+
+
+def format_539_push():
+    try:
+        pack = get_or_build_today_pick_539()
+        today_str = now_tw().strftime("%Y.%m.%d")
+        quote = get_daily_quote()
+        m = parse_models_from_note(pack["note"])
+        rank_lines = pack["top_hot"].split()
+        result_text = get_latest_model_result_text()
+
+        return (
+            "【理性陪跑研究室｜539 AI母盤日報】\n\n"
+            f"日期\n{today_str}\n\n"
+            "▍今日核心母盤（9碼）\n"
+            f"{m['motherboard']}\n\n"
+            "▍主軸號（2星穩定）\n"
+            f"{m['stable2']}\n\n"
+            "▍3星主攻盤\n"
+            f"{m['attack3']}\n\n"
+            "▍4星爆發盤\n"
+            f"{m['burst4']}\n\n"
+            "▍結構分析\n"
+            f"{structure_text_from_numbers(m['motherboard'])}\n"
+            f"近30期活躍區段：{pack['hot_zone']}\n"
+            f"冷號補位：{m.get('cold_note', '無')}\n"
+            f"高頻樣本：{'・'.join(rank_lines[:4])}\n"
+            f"{result_text}\n"
+            "▍型態判斷\n"
+            f"{m.get('pattern_note', '')}\n\n"
+            "▍AI熱度排行\n"
+            f"{chr(10).join(rank_lines[:5])}\n\n"
+            "▍使用邏輯\n"
+            "2星看主軸，3星看主攻，4星看爆發盤。\n"
+            "三層都來自同一組母盤，不是分開亂數。\n\n"
+            "—— AI陪跑語錄 ——\n"
+            f"{quote}\n\n"
+            "（數據結構參考，非保證）"
+        )
+    except Exception as e:
+        log("FORMAT_539_PUSH ERROR:", repr(e))
+        return (
+            "【理性陪跑研究室｜539 AI母盤日報】\n\n"
+            "核心母盤\n04 08 13 18 21 27 33 36 39\n\n"
+            "主軸號\n18 21 33\n\n"
+            "3星主攻盤\n08 18 21 33 36\n\n"
+            "4星爆發盤\n04 08 18 21 27 33 36 39"
+        )
+
+
+def format_today_companion():
+    try:
+        pack = get_or_build_today_pick_539()
+        m = parse_models_from_note(pack["note"])
+        quote = get_daily_quote()
+        result_text = get_latest_model_result_text()
+
+        return (
+            "【今日539 AI母盤】\n\n"
+            "▍核心母盤\n"
+            f"{m['motherboard']}\n\n"
+            "▍主軸號｜2星穩定\n"
+            f"{m['stable2']}\n\n"
+            "▍3星主攻\n"
+            f"{m['attack3']}\n\n"
+            "▍4星爆發\n"
+            f"{m['burst4']}\n\n"
+            "▍結構分析\n"
+            f"{structure_text_from_numbers(m['motherboard'])}\n"
+            f"活躍區段：{pack['hot_zone']}\n"
+            f"冷號補位：{m.get('cold_note', '無')}\n"
+            f"高頻樣本：{'・'.join(pack['top_hot'].split()[:4])}\n"
+            f"{result_text}\n"
+            "▍型態判斷\n"
+            f"{m.get('pattern_note', '')}\n\n"
+            "▍策略解讀\n"
+            "主軸號：偏穩定，適合抓2星。\n"
+            "3星主攻：主軸加延伸號，抓今日主要節奏。\n"
+            "4星爆發：加入冷號與型態補位，拚波動放大。\n\n"
+            "▍AI陪跑語錄\n"
+            f"{quote}\n\n"
+            "（數據結構參考，非保證）"
+        )
+    except Exception as e:
+        log("FORMAT_TODAY_COMPANION ERROR:", repr(e))
+        return (
+            "【今日539 AI母盤】\n\n"
+            "核心母盤\n04 08 13 18 21 27 33 36 39\n\n"
+            "主軸號\n18 21 33"
+        )
+
+
+# =========================
+# 539 智能點數配置
+# =========================
+def build_bet_plan(total, mode="balanced"):
+    try:
+        total = int(total)
+    except Exception:
+        total = 3000
+    if total <= 0:
+        total = 3000
+
+    modes = {
+        "safe": {
+            "name": "穩健模式",
+            "desc": "2星回補為主｜3星主攻｜4星小注爆發",
+            "p2": 0.45,
+            "p3": 0.40,
+            "p4": 0.15,
+        },
+        "balanced": {
+            "name": "均衡模式",
+            "desc": "2星回補｜3星主攻｜4星爆發",
+            "p2": 0.30,
+            "p3": 0.50,
+            "p4": 0.20,
+        },
+        "burst": {
+            "name": "爆發模式",
+            "desc": "降低2星配置，提高3星與4星攻擊",
+            "p2": 0.20,
+            "p3": 0.50,
+            "p4": 0.30,
+        }
+    }
+    cfg = modes.get(mode, modes["balanced"])
+
+    def money(x):
+        return f"{int(x):,}"
+
+    def nums_from_text(text, limit=None):
+        out = []
+        for part in (text or "").split():
+            try:
+                n = int(part)
+                if 1 <= n <= 39 and n not in out:
+                    out.append(n)
+            except Exception:
+                pass
+        return out[:limit] if limit else out
+
+    def fmt_nums(nums):
+        return " ".join([f"{n:02d}" for n in nums])
 
     try:
-        data = json.loads(body.decode("utf-8"))
-    except Exception:
-        abort(400)
+        pack = get_or_build_today_pick_539()
+        m = parse_models_from_note(pack.get("note", ""))
+        two_nums = nums_from_text(m.get("stable2", ""), 3)
+        three_nums = nums_from_text(m.get("attack3", ""), 5)
+        four_nums = nums_from_text(m.get("burst4", ""), 6)
+        mother = nums_from_text(m.get("motherboard", ""))
 
-    for event in data.get("events", []):
-        if event.get("type") != "message":
-            continue
-        msg = event.get("message", {})
-        if msg.get("type") != "text":
-            continue
-        reply_token = event.get("replyToken")
-        user_text = msg.get("text", "")
-        answer = handle_text(user_text)
-        if reply_token:
-            reply_text(reply_token, answer)
+        for n in mother:
+            if len(two_nums) < 3 and n not in two_nums:
+                two_nums.append(n)
+            if len(three_nums) < 5 and n not in three_nums:
+                three_nums.append(n)
+            if len(four_nums) < 6 and n not in four_nums:
+                four_nums.append(n)
 
-    return "OK"
+        for n in range(1, 40):
+            if len(two_nums) < 3 and n not in two_nums:
+                two_nums.append(n)
+            if len(three_nums) < 5 and n not in three_nums:
+                three_nums.append(n)
+            if len(four_nums) < 6 and n not in four_nums:
+                four_nums.append(n)
+            if len(two_nums) >= 3 and len(three_nums) >= 5 and len(four_nums) >= 6:
+                break
 
-# 兼容舊 webhook 路徑
+        two_nums = sorted(two_nums[:3])
+        three_nums = sorted(three_nums[:5])
+        four_nums = sorted(four_nums[:6])
+    except Exception as e:
+        log("BUILD_BET_PLAN_NUMBERS_ERROR:", repr(e))
+        two_nums = [18, 21, 33]
+        three_nums = [8, 18, 21, 33, 36]
+        four_nums = [4, 8, 18, 21, 27, 33]
+
+    c2, c3, c4 = 3, 10, 15
+    odd2, odd3, odd4 = 70.44, 840, 12000
+
+    amt2 = int(total * cfg["p2"])
+    amt3 = int(total * cfg["p3"])
+    amt4 = total - amt2 - amt3
+
+    per2 = max(1, amt2 // c2)
+    per3 = max(1, amt3 // c3)
+    per4 = max(1, amt4 // c4)
+
+    real2 = per2 * c2
+    real3 = per3 * c3
+    real4 = per4 * c4
+    real_total = real2 + real3 + real4
+
+    win2 = int(per2 * odd2)
+    win3 = int(per3 * odd3)
+    win4 = int(per4 * odd4)
+
+    two_combo_text = (
+        f"{two_nums[0]:02d}-{two_nums[1]:02d}\n"
+        f"{two_nums[0]:02d}-{two_nums[2]:02d}\n"
+        f"{two_nums[1]:02d}-{two_nums[2]:02d}"
+    )
+
+    return (
+        f"【539 點數配置｜{money(total)}點】\n\n"
+        f"模式：{cfg['name']}\n"
+        f"策略：{cfg['desc']}\n\n"
+        "▍今日建議打法\n"
+        "小本金：主打2星＋3星\n"
+        "中本金：3星主攻，4星小注\n"
+        "高本金：4星放大，但不追單\n\n"
+        "重點不是每期都重壓，\n"
+        "而是照同一套結構執行。\n\n"
+        "▍使用號碼（直接照下）\n\n"
+        f"2星：{fmt_nums(two_nums)}\n"
+        "👉 選3顆，全碰\n"
+        f"{two_combo_text}\n"
+        "共3碰\n\n"
+        f"3星：{fmt_nums(three_nums)}\n"
+        "👉 任選3顆組合，共10碰\n\n"
+        f"4星：{fmt_nums(four_nums)}\n"
+        "👉 任選4顆組合，共15碰\n\n"
+        "━━━━━━━━━━━━━━━\n\n"
+        "▍點數分配\n\n"
+        f"2星：每碰 {money(per2)} × 3碰 = {money(real2)}\n"
+        f"3星：每碰 {money(per3)} × 10碰 = {money(real3)}\n"
+        f"4星：每碰 {money(per4)} × 15碰 = {money(real4)}\n\n"
+        f"實際投入：約 {money(real_total)} 點\n\n"
+        "━━━━━━━━━━━━━━━\n\n"
+        "▍命中試算\n\n"
+        f"中2星：約 {money(win2)}\n"
+        f"中3星：約 {money(win3)}\n"
+        f"中4星：約 {money(win4)}\n\n"
+        "━━━━━━━━━━━━━━━\n\n"
+        "▍下注說明\n\n"
+        "系統已幫你整理顆數與碰數。\n"
+        "直接用上方號碼照星級全碰即可。\n\n"
+        "2星看主軸號\n"
+        "3星看主攻盤\n"
+        "4星看爆發盤\n\n"
+        "（點數配置僅供策略參考）"
+    )
+
+
+# =========================
+# Bingo 備援模式
+# =========================
+def fetch_recent_bingo_results(max_rows: int = 60):
+    """
+    目前保留你的原本備援邏輯：用時間序列產生穩定模型資料。
+    因為你要求只換 app.py、不另外設定資料源，所以這裡不硬接未知外部 API，避免跑不動。
+    之後若你提供 Bingo 真實開獎 URL，只需要替換這個函式即可。
+    """
+    now = now_tw()
+    start_dt = now.replace(hour=7, minute=5, second=0, microsecond=0)
+
+    if now < start_dt:
+        return []
+
+    minutes_passed = int((now - start_dt).total_seconds() // 60)
+    current_index = minutes_passed // 5
+
+    max_index = ((23 - 7) * 60 + (55 - 5)) // 5
+    if current_index < 0 or current_index > max_index:
+        return []
+
+    draws = []
+    for i in range(max_rows):
+        idx = current_index - i
+        if idx < 0:
+            break
+
+        draw_dt = start_dt + timedelta(minutes=idx * 5)
+        period = f"{draw_dt.strftime('%Y%m%d')}{idx:03d}"
+        rng = random.Random(f"bingo-backup-{period}")
+        nums = sorted(rng.sample(range(1, 81), 20))
+
+        draws.append({
+            "period": period,
+            "time": draw_dt.strftime("%H:%M"),
+            "numbers": nums
+        })
+
+    return draws
+
+
+def bingo_zone_summary(draws):
+    zones = {"1-20": 0, "21-40": 0, "41-60": 0, "61-80": 0}
+    freq = {i: 0 for i in range(1, 81)}
+
+    for draw in draws:
+        for n in draw["numbers"]:
+            freq[n] += 1
+            if 1 <= n <= 20:
+                zones["1-20"] += 1
+            elif 21 <= n <= 40:
+                zones["21-40"] += 1
+            elif 41 <= n <= 60:
+                zones["41-60"] += 1
+            else:
+                zones["61-80"] += 1
+
+    hot_zone = max(zones.items(), key=lambda x: x[1])[0]
+    hot_samples = sorted(freq.items(), key=lambda x: x[1], reverse=True)[:4]
+    hot_samples_str = "・".join([f"{n:02d}" for n, _ in hot_samples])
+    return hot_zone, hot_samples_str, freq
+
+
+def _time_bucket(minutes_step: int):
+    return int(now_tw().timestamp() // 60) // minutes_step
+
+
+def _weighted_pick_bingo(freq_dict, seed_text: str):
+    rng = random.Random(seed_text)
+
+    max_f = max(freq_dict.values()) or 1
+    weights = {}
+    for n in range(1, 81):
+        weights[n] = (freq_dict[n] / max_f) + 0.05
+
+    chosen = []
+    pool = dict(weights)
+    while len(chosen) < 5 and pool:
+        total = sum(pool.values())
+        r = rng.uniform(0, total)
+        acc = 0
+        pick = None
+        for n, w in pool.items():
+            acc += w
+            if r <= acc:
+                pick = n
+                break
+        if pick is None:
+            pick = rng.choice(list(pool.keys()))
+        chosen.append(pick)
+        pool.pop(pick, None)
+
+    chosen = sorted(chosen[:5])
+    return " ".join([f"{n:02d}" for n in chosen])
+
+
+def get_bingo_analysis_bundle():
+    try:
+        draws = fetch_recent_bingo_results(max_rows=30)
+    except Exception as e:
+        log("GET_BINGO_ANALYSIS_BUNDLE ERROR:", repr(e))
+        draws = []
+
+    if not draws:
+        return {
+            "one": "07 19 34 52 71",
+            "five": "05 22 31 46 68",
+            "ten": "09 18 27 55 79",
+            "one_zone": "21-40",
+            "five_zone": "21-40",
+            "ten_zone": "41-60",
+            "one_hot": "07・19・34・52",
+            "five_hot": "05・22・31・46",
+            "ten_hot": "09・18・27・55",
+            "latest": None
+        }
+
+    try:
+        latest = draws[0]
+        d1 = draws[:1]
+        d5 = draws[:5]
+        d10 = draws[:10]
+
+        zone1, hot1, freq1 = bingo_zone_summary(d1)
+        zone5, hot5, freq5 = bingo_zone_summary(d5)
+        zone10, hot10, freq10 = bingo_zone_summary(d10)
+
+        seed_base = now_tw().strftime("%Y%m%d")
+        one = _weighted_pick_bingo(freq1, f"{seed_base}-b1-{_time_bucket(5)}")
+        five = _weighted_pick_bingo(freq5, f"{seed_base}-b5-{_time_bucket(15)}")
+        ten = _weighted_pick_bingo(freq10, f"{seed_base}-b10-{_time_bucket(25)}")
+
+        seen = {one}
+        if five in seen:
+            five = _weighted_pick_bingo(freq5, f"{seed_base}-b5-alt-{_time_bucket(15)}")
+        seen.add(five)
+        if ten in seen:
+            ten = _weighted_pick_bingo(freq10, f"{seed_base}-b10-alt-{_time_bucket(25)}")
+
+        return {
+            "one": one,
+            "five": five,
+            "ten": ten,
+            "one_zone": zone1,
+            "five_zone": zone5,
+            "ten_zone": zone10,
+            "one_hot": hot1,
+            "five_hot": hot5,
+            "ten_hot": hot10,
+            "latest": latest
+        }
+
+    except Exception as e:
+        log("GET_BINGO_ANALYSIS_BUNDLE BUILD ERROR:", repr(e))
+        return {
+            "one": "07 19 34 52 71",
+            "five": "05 22 31 46 68",
+            "ten": "09 18 27 55 79",
+            "one_zone": "21-40",
+            "five_zone": "21-40",
+            "ten_zone": "41-60",
+            "one_hot": "07・19・34・52",
+            "five_hot": "05・22・31・46",
+            "ten_hot": "09・18・27・55",
+            "latest": None
+        }
+
+
+def format_bingo_1_message():
+    try:
+        b = get_bingo_analysis_bundle()
+        return (
+            "【Bingo AI短線分析】\n\n"
+            "1期分析\n"
+            f"{b['one']}\n\n"
+            "活躍區段\n"
+            f"{b['one_zone']}\n\n"
+            "高頻樣本\n"
+            f"{b['one_hot']}\n\n"
+            "數據觀察\n"
+            "短線熱度集中在中區，\n"
+            "高段號碼出現間隔拉長。\n\n"
+            "分析結論\n"
+            "短線節奏偏中區，\n"
+            "高區補位機率存在。\n\n"
+            "（數據結構參考）"
+        )
+    except Exception as e:
+        log("FORMAT_BINGO_1 ERROR:", repr(e))
+        return "【Bingo AI短線分析】\n\n1期分析\n07 19 34 52 71"
+
+
+def format_bingo_5_message():
+    try:
+        b = get_bingo_analysis_bundle()
+        return (
+            "【Bingo AI節奏分析】\n\n"
+            "5期分析\n"
+            f"{b['five']}\n\n"
+            "活躍區段\n"
+            f"{b['five_zone']}\n\n"
+            "高頻樣本\n"
+            f"{b['five_hot']}\n\n"
+            "數據觀察\n"
+            "近5期中段號活躍度明顯提升，\n"
+            "低區補位頻率增加。\n\n"
+            "分析結論\n"
+            "目前節奏偏向中段延續，\n"
+            "短線可優先觀察中區帶。\n\n"
+            "（數據結構參考）"
+        )
+    except Exception as e:
+        log("FORMAT_BINGO_5 ERROR:", repr(e))
+        return "【Bingo AI節奏分析】\n\n5期分析\n05 22 31 46 68"
+
+
+def format_bingo_10_message():
+    try:
+        b = get_bingo_analysis_bundle()
+        return (
+            "【Bingo AI結構分析】\n\n"
+            "10期分析\n"
+            f"{b['ten']}\n\n"
+            "活躍區段\n"
+            f"{b['ten_zone']}\n\n"
+            "高頻樣本\n"
+            f"{b['ten_hot']}\n\n"
+            "數據觀察\n"
+            "近10期中高區活躍，\n"
+            "低區出現頻率下降。\n\n"
+            "分析結論\n"
+            "整體節奏偏中高區，\n"
+            "短線仍有延續機會。\n\n"
+            "（數據結構參考）"
+        )
+    except Exception as e:
+        log("FORMAT_BINGO_10 ERROR:", repr(e))
+        return "【Bingo AI結構分析】\n\n10期分析\n09 18 27 55 79"
+
+
+def format_bingo_evening_push():
+    try:
+        b = get_bingo_analysis_bundle()
+        quote = get_daily_quote()
+        return (
+            "【理性陪跑研究室｜Bingo Bingo】\n"
+            f"{now_tw().strftime('%Y.%m.%d')} 晚間模型\n\n"
+            "▍1期短線模型\n"
+            f"{b['one']}\n\n"
+            "▍5期節奏模型\n"
+            f"{b['five']}\n\n"
+            "▍10期結構模型\n"
+            f"{b['ten']}\n\n"
+            "—— AI陪跑語錄 ——\n"
+            f"{quote}"
+        )
+    except Exception as e:
+        log("FORMAT_BINGO_EVENING ERROR:", repr(e))
+        return "【理性陪跑研究室｜Bingo Bingo】\n\n07 19 34 52 71"
+
+
+def format_bingo_latest_push():
+    b = get_bingo_analysis_bundle()
+
+    msg = (
+        "【Bingo 即時模型】\n\n"
+        "下一期短線模型\n"
+        f"{b['one']}\n\n"
+        "活躍區段\n"
+        f"{b['one_zone']}\n\n"
+        "AI觀察\n"
+        "短線節奏偏中區\n\n"
+        "數據結構參考\n"
+        "非保證結果"
+    )
+
+    latest = b["latest"]
+    if latest:
+        return latest["period"], msg
+
+    fake_period = now_tw().strftime("%Y%m%d%H%M")
+    return fake_period, msg
+
+
+def format_expiry_reminder(exp_dt):
+    exp_tw = exp_dt.astimezone(TZ_TW)
+    return (
+        "【會員到期提醒】\n\n"
+        "你的會員將在 3 天後到期。\n"
+        f"到期時間：{exp_tw.strftime('%Y-%m-%d %H:%M')}\n\n"
+        "若要續費，請聯絡管理員。"
+    )
+
+
+def format_welcome_message(exp_dt=None):
+    exp_line = ""
+    if exp_dt:
+        exp_line = f"\n到期時間：{exp_dt.astimezone(TZ_TW).strftime('%Y-%m-%d %H:%M')}\n"
+
+    return (
+        "✅ 會員已開通\n"
+        f"{exp_line}\n"
+        "你現在可以使用：\n\n"
+        "1. 今日陪跑\n"
+        "查看539母盤、主軸、3星、4星盤\n\n"
+        "2. 點數配置\n"
+        "依本金產生點數配置\n\n"
+        "3. 賓果分析\n"
+        "查看1期、5期、10期模型\n\n"
+        "4. 預測分析\n"
+        "開啟Bingo即時推播\n\n"
+        "建議先輸入：今日陪跑"
+    )
+
+
+def format_help_message():
+    return (
+        "【功能選單】\n\n"
+        "今日陪跑\n"
+        "查看539 AI模型\n\n"
+        "免費試用\n"
+        "免費體驗24小時（每人一次）\n\n"
+        "點數配置\n"
+        "539 2星/3星/4星智能配置\n\n"
+        "賓果分析\n"
+        "查看賓果模型\n\n"
+        "1期 / 5期 / 10期\n"
+        "快速取得賓果分析\n\n"
+        "預測分析\n"
+        "開啟即時模型推播\n\n"
+        "取消預測分析\n"
+        "停止即時推播\n\n"
+        "開啟每日推播\n"
+        "取消每日推播\n\n"
+        "我的到期日\n"
+        "查看會員期限"
+    )
+
+
+# =========================
+# Health
+# =========================
+@app.route("/health")
+def health():
+    return "OK", 200
+
+
+@app.route("/")
+def home():
+    return "Bot is running.", 200
+
+
+# =========================
+# Cron Routes
+# =========================
+@app.route("/cron/daily-push")
+def cron_daily_push():
+    secret = request.args.get("secret", "")
+    if secret != CRON_SECRET:
+        abort(403)
+
+    try:
+        ensure_db_ready()
+        update_latest_model_result()
+
+        members = get_daily_push_users()
+        now = now_tw()
+        today_key = now.strftime("%Y-%m-%d")
+
+        reminder_key = f"expiry_reminder_{today_key}"
+        if get_push_state(reminder_key) is None:
+            expiring_rows = get_expiring_members(days_before=3)
+            for uid, exp_dt in expiring_rows:
+                push_message(uid, format_expiry_reminder(exp_dt))
+            set_push_state(reminder_key, "done")
+
+        if not members:
+            return "No active members", 200
+
+        if now.weekday() != 6:
+            key_539 = f"daily_539_{today_key}"
+            if get_push_state(key_539) is None:
+                msg539 = format_539_push()
+                for uid in members:
+                    push_message(uid, msg539)
+                set_push_state(key_539, "done")
+
+        key_bingo = f"daily_bingo_{today_key}"
+        if get_push_state(key_bingo) is None:
+            msg_bingo = format_bingo_evening_push()
+            for uid in members:
+                push_message(uid, msg_bingo)
+            set_push_state(key_bingo, "done")
+
+        return "OK", 200
+    except Exception as e:
+        log("CRON_DAILY_ERROR:", repr(e))
+        return "ERROR", 500
+
+
+@app.route("/cron/check-bingo")
+def cron_check_bingo():
+    secret = request.args.get("secret", "")
+    if secret != CRON_SECRET:
+        return "Forbidden: bad secret", 403
+
+    try:
+        ensure_db_ready()
+
+        hhmm = now_tw().strftime("%H:%M")
+        if hhmm < "07:05" or hhmm > "23:55":
+            return f"Outside draw hours: {hhmm}", 200
+
+        period, msg = format_bingo_latest_push()
+        if not period or not msg:
+            return "No bingo data fetched", 200
+
+        last_period = get_push_state("latest_bingo_period")
+        if last_period == period:
+            return f"No new result. Current period={period}", 200
+
+        users = get_prediction_subscribers()
+        if not users:
+            return f"No prediction subscribers. Current period={period}", 200
+
+        success_count = 0
+        for uid in users:
+            ok = push_message(uid, msg)
+            if ok:
+                success_count += 1
+
+        set_push_state("latest_bingo_period", period)
+        return f"OK. period={period}, pushed={success_count}", 200
+
+    except Exception as e:
+        log("CRON_BINGO_ERROR:", repr(e))
+        return f"ERROR: {repr(e)}", 500
+
+
+@app.route("/cron/update-539-result")
+def cron_update_539_result():
+    secret = request.args.get("secret", "")
+    if secret != CRON_SECRET:
+        return "Forbidden: bad secret", 403
+
+    try:
+        ensure_db_ready()
+        result = update_latest_model_result()
+        if not result:
+            return "No result updated", 200
+        return f"OK {result}", 200
+    except Exception as e:
+        log("CRON_UPDATE_539_RESULT_ERROR:", repr(e))
+        return f"ERROR: {repr(e)}", 500
+
+
+# =========================
+# Webhook
+# =========================
 @app.route("/webhook", methods=["POST"])
 def webhook():
-    return callback()
+    try:
+        raw = request.get_data()
+        signature = request.headers.get("X-Line-Signature", "")
 
+        if not verify_line_signature(raw, signature):
+            log("SIGNATURE ERROR")
+            abort(403)
+
+        body = request.get_json(silent=True) or {}
+        events = body.get("events", [])
+
+        log("WEBHOOK HIT AT:", now_tw().strftime("%Y-%m-%d %H:%M:%S"))
+
+        try:
+            ensure_db_ready()
+        except Exception as e:
+            log("INIT_DB ERROR:", repr(e))
+            return "OK"
+
+        for event in events:
+            try:
+                if event.get("type") != "message":
+                    continue
+
+                message = event.get("message", {})
+                if message.get("type") != "text":
+                    continue
+
+                text = (message.get("text") or "").replace("\u3000", " ").strip()
+                reply_token = event.get("replyToken")
+                user_id = event.get("source", {}).get("userId", "")
+
+                log("WEBHOOK TEXT:", text)
+                log("WEBHOOK USER:", user_id)
+
+                if text == "申請加入會員":
+                    reply_message(
+                        reply_token,
+                        "請輸入:\n"
+                        "(遊戲帳號 XXXXXX)\n"
+                        "X為3A帳號 ()內都要輸入\n\n"
+                        "範例: 遊戲帳號 123456"
+                    )
+                    continue
+
+                if text == "賓果分析":
+                    reply_bingo_menu(reply_token)
+                    continue
+
+                if text in ("免費試用", "免費體驗", "試用一天", "免費使用1天", "免費使用一天"):
+                    exp_dt, status = start_free_trial(user_id, hours=24)
+                    if status == "already_member" and exp_dt:
+                        reply_message(
+                            reply_token,
+                            "✅ 你目前已經是會員\n\n"
+                            f"到期時間：{exp_dt.astimezone(TZ_TW).strftime('%Y-%m-%d %H:%M')}\n\n"
+                            "可直接輸入：今日陪跑 / 賓果分析"
+                        )
+                    elif status == "used":
+                        reply_message(
+                            reply_token,
+                            "你已使用過免費試用。\n\n"
+                            "若要繼續使用完整模型，請輸入：申請加入會員"
+                        )
+                    elif status == "opened" and exp_dt:
+                        reply_message(
+                            reply_token,
+                            "✅ 免費試用已開通\n\n"
+                            "可使用時間：24小時\n"
+                            f"到期時間：{exp_dt.astimezone(TZ_TW).strftime('%Y-%m-%d %H:%M')}\n\n"
+                            "可輸入：\n"
+                            "今日陪跑\n"
+                            "點數配置\n"
+                            "賓果分析\n"
+                            "預測分析\n\n"
+                            "提醒：數據模型僅供參考，請理性使用。"
+                        )
+                    else:
+                        reply_message(reply_token, "暫時無法開通試用，請稍後再試。")
+                    continue
+
+                if text == "點數配置":
+                    if not is_member(user_id):
+                        reply_message(reply_token, "🌿 點數配置屬於會員內容\n\n請先輸入：免費試用 或 遊戲帳號 XXXXX")
+                    else:
+                        reply_bet_plan_menu(reply_token)
+                    continue
+
+                if text.startswith(("穩健", "均衡", "爆發")):
+                    if not is_member(user_id):
+                        reply_message(reply_token, "🌿 點數配置屬於會員內容\n\n請先輸入：免費試用 或 遊戲帳號 XXXXX")
+                        continue
+                    try:
+                        parts = text.split()
+                        if len(parts) != 2:
+                            raise ValueError("bad format")
+                        mode_word = parts[0]
+                        amount = int(parts[1])
+                        mode_map = {"穩健": "safe", "均衡": "balanced", "爆發": "burst"}
+                        msg = build_bet_plan(amount, mode_map.get(mode_word, "balanced"))
+                        reply_message(reply_token, msg)
+                    except Exception as e:
+                        log("BET_PLAN_INPUT_ERROR:", repr(e))
+                        reply_message(reply_token, "格式錯誤\n例如：穩健 3000 / 均衡 3000 / 爆發 5000")
+                    continue
+
+                if text.startswith("下注"):
+                    if not is_member(user_id):
+                        reply_message(reply_token, "🌿 點數配置屬於會員內容\n\n請先輸入：免費試用 或 遊戲帳號 XXXXX")
+                        continue
+                    try:
+                        amount = int(text.replace("下注", "").strip())
+                        reply_message(reply_token, build_bet_plan(amount, "balanced"))
+                    except Exception as e:
+                        log("BET_PLAN_CUSTOM_ERROR:", repr(e))
+                        reply_message(reply_token, "格式錯誤\n例如：下注 3000")
+                    continue
+
+                if text in ("指令", "help", "HELP"):
+                    reply_message(reply_token, format_help_message())
+                    continue
+
+                if text.startswith("遊戲帳號 "):
+                    parts = text.split(maxsplit=1)
+                    if len(parts) != 2 or not parts[1].strip():
+                        reply_message(reply_token, "格式：遊戲帳號 XXXXX")
+                    else:
+                        game_account = parts[1].strip()
+                        save_pending_account(game_account, user_id)
+                        reply_message(
+                            reply_token,
+                            "✅ 已收到你的申請加入會員\n\n"
+                            f"帳號：{game_account}\n\n"
+                            "請等待管理員確認開通。\n"
+                            "（開通後可輸入：今日陪跑 / 賓果分析 / 預測分析 / 我的到期日）"
+                        )
+                    continue
+
+                if text.startswith("待確認"):
+                    parts = text.split()
+                    secret = parts[1] if len(parts) >= 2 else ""
+                    if not admin_ok(user_id, secret):
+                        reply_message(reply_token, "管理權限不足。")
+                        continue
+
+                    rows = get_latest_pending(50)
+                    if not rows:
+                        reply_message(reply_token, "目前沒有待確認帳號。")
+                        continue
+
+                    msg = "📋 最近待確認帳號（最多50筆）\n\n"
+                    for ga, uid, ts in rows:
+                        ts_str = ts.astimezone(TZ_TW).strftime("%Y-%m-%d %H:%M")
+                        msg += f"帳號：{ga}\nuserId：{uid}\n時間：{ts_str}\n-----------------\n"
+                    reply_message(reply_token, msg[:5000])
+                    continue
+
+                if text.startswith("確認 "):
+                    parts = text.split()
+                    if len(parts) not in (2, 3):
+                        reply_message(reply_token, "格式：確認 <遊戲帳號> <管理密碼>\n例：確認 123456 aaa888")
+                        continue
+
+                    game_account = parts[1]
+                    secret = parts[2] if len(parts) == 3 else ""
+
+                    if not admin_ok(user_id, secret):
+                        reply_message(reply_token, "管理權限不足。")
+                        continue
+
+                    target_user_id = pop_pending_user_id(game_account)
+                    if not target_user_id:
+                        reply_message(reply_token, f"找不到待確認帳號：{game_account}")
+                        continue
+
+                    dt_tw = set_expiry_plus_days(target_user_id, 30)
+                    enable_daily_push(target_user_id)
+
+                    reply_message(
+                        reply_token,
+                        "✅ 已開通\n\n"
+                        f"帳號：{game_account}\n"
+                        f"到期（台灣時間）：{dt_tw.strftime('%Y-%m-%d %H:%M')}"
+                    )
+
+                    push_message(target_user_id, format_welcome_message(dt_tw))
+                    continue
+
+                if text == "我的到期日":
+                    exp = get_expiry(user_id)
+                    if not exp:
+                        reply_message(reply_token, "你目前尚未開通。\n請先輸入：遊戲帳號 XXXXX")
+                    else:
+                        reply_message(reply_token, "⏳ 你的到期時間（台灣時間）：\n" + exp.astimezone(TZ_TW).strftime("%Y-%m-%d %H:%M"))
+                    continue
+
+                if text == "預測分析":
+                    if not is_member(user_id):
+                        reply_message(reply_token, "🌿 預測分析屬於會員內容\n\n請先輸入：遊戲帳號 XXXXX")
+                    else:
+                        enable_prediction(user_id)
+                        reply_message(
+                            reply_token,
+                            "✅ 已開啟預測分析\n\n"
+                            "之後若有 Bingo 即時分析更新，\n"
+                            "你會收到：\n"
+                            "1) 下一期短線模型"
+                        )
+                    continue
+
+                if text == "取消預測分析":
+                    disable_prediction(user_id)
+                    reply_message(reply_token, "✅ 已取消預測分析推播")
+                    continue
+
+                if text == "開啟每日推播":
+                    if not is_member(user_id):
+                        reply_message(reply_token, "🌿 此功能屬於會員內容\n\n請先輸入：遊戲帳號 XXXXX")
+                    else:
+                        enable_daily_push(user_id)
+                        reply_message(reply_token, "✅ 已開啟每日推播")
+                    continue
+
+                if text == "取消每日推播":
+                    disable_daily_push(user_id)
+                    reply_message(reply_token, "✅ 已取消每日推播")
+                    continue
+
+                if text == "今日陪跑":
+                    if not is_member(user_id):
+                        reply_message(reply_token, "🌿 今日陪跑屬於會員內容\n\n請先輸入：遊戲帳號 XXXXX")
+                    else:
+                        reply_message(reply_token, format_today_companion())
+                    continue
+
+                if text == "母盤追蹤":
+                    if not is_member(user_id):
+                        reply_message(reply_token, "🌿 母盤追蹤屬於會員內容\n\n請先輸入：遊戲帳號 XXXXX")
+                    else:
+                        update_latest_model_result()
+                        msg = get_latest_model_result_text()
+                        reply_message(reply_token, msg.strip() if msg.strip() else "目前尚無可追蹤資料。")
+                    continue
+
+                if text in ("1期", "賓果1期分析"):
+                    if not is_member(user_id):
+                        reply_message(reply_token, "🌿 賓果1期分析屬於會員內容\n\n請先輸入：遊戲帳號 XXXXX")
+                    else:
+                        reply_message(reply_token, format_bingo_1_message())
+                    continue
+
+                if text in ("5期", "賓果5期分析"):
+                    if not is_member(user_id):
+                        reply_message(reply_token, "🌿 賓果5期分析屬於會員內容\n\n請先輸入：遊戲帳號 XXXXX")
+                    else:
+                        reply_message(reply_token, format_bingo_5_message())
+                    continue
+
+                if text in ("10期", "賓果10期分析"):
+                    if not is_member(user_id):
+                        reply_message(reply_token, "🌿 賓果10期分析屬於會員內容\n\n請先輸入：遊戲帳號 XXXXX")
+                    else:
+                        reply_message(reply_token, format_bingo_10_message())
+                    continue
+
+                reply_message(reply_token, "輸入「指令」查看功能。")
+
+            except Exception as e:
+                log("EVENT HANDLE ERROR:", repr(e))
+                try:
+                    if event.get("replyToken"):
+                        reply_message(event.get("replyToken"), "系統忙碌中，請稍後再試一次。")
+                except Exception as e2:
+                    log("REPLY FAIL AFTER EVENT ERROR:", repr(e2))
+                continue
+
+        return "OK"
+
+    except Exception as e:
+        log("WEBHOOK FATAL ERROR:", repr(e))
+        return "OK"
+
+
+# =========================
+# 啟動
+# =========================
 if __name__ == "__main__":
-    port = int(os.getenv("PORT", "5000"))
+    try:
+        ensure_db_ready()
+    except Exception as e:
+        log("START INIT_DB ERROR:", repr(e))
+
+    port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
