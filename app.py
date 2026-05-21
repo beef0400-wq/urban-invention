@@ -13,7 +13,7 @@ from datetime import datetime, timedelta, timezone, date
 from itertools import combinations
 
 app = Flask(__name__)
-APP_VERSION = "2026-05-20-clean-v539-wide-bingo-real"
+APP_VERSION = "2026-05-20-clean-v539-wide-bingo-real-v2-cachefix"
 
 # ========= 環境變數 =========
 CHANNEL_ACCESS_TOKEN = os.getenv("CHANNEL_ACCESS_TOKEN", "").strip()
@@ -707,6 +707,7 @@ def build_539_models(draws):
 
     if not draws:
         return {
+            "model_version": APP_VERSION,
             "motherboard": fmt_nums(fallback),
             "stable2": "09 21 32 33 38",
             "attack3": "03 09 18 21 24 32 33 38",
@@ -824,6 +825,7 @@ def build_539_models(draws):
     tail_note = "｜".join(f"{t}尾{c}顆" for t, c in sorted(tail_count.items()))
 
     return {
+        "model_version": APP_VERSION,
         "motherboard": fmt_nums(motherboard),
         "stable2": fmt_nums(core),
         "attack3": fmt_nums(attack),
@@ -839,6 +841,12 @@ def build_539_models(draws):
 
 
 def get_or_build_today_pick_539():
+    """
+    取得今日539模型。
+    cache 修正版：
+    - 如果 daily_pick_cache 是舊版本，直接重建。
+    - 避免畫面標題已更新，但 2星/3星/4星仍吃舊 note。
+    """
     ensure_latest_539_in_db()
     draws = load_539_draws(limit=240)
     fresh, latest_date, stale_days = is_539_data_fresh(draws[:1])
@@ -852,17 +860,58 @@ def get_or_build_today_pick_539():
         row = cur.fetchone()
 
     if row and fresh:
-        return {"numbers": row[0], "hot_zone": row[1], "top_hot": row[2], "note": row[3]}
+        try:
+            cached_note = json.loads(row[3] or "{}")
+            if cached_note.get("model_version") == APP_VERSION:
+                return {"numbers": row[0], "hot_zone": row[1], "top_hot": row[2], "note": row[3]}
+            else:
+                log("539_CACHE_VERSION_MISMATCH_REBUILD:", cached_note.get("model_version"), APP_VERSION)
+        except Exception:
+            log("539_CACHE_NOTE_PARSE_FAIL_REBUILD")
 
     d30 = draws[:30]
     hot_zone, ranked = hot_zone_539(d30)
     top_hot = fmt_nums([n for n, _ in ranked[:5]])
+
     models = build_539_models(draws)
+    models["model_version"] = APP_VERSION
     models["data_fresh"] = bool(fresh)
     models["latest_draw_date"] = latest_date.strftime("%Y-%m-%d") if latest_date else "無"
     models["data_stale_days"] = stale_days
 
+    # 硬性防呆：確保輸出顆數一定是 12 / 5 / 8 / 10
+    mother = parse_nums_text(models.get("motherboard", ""))
+    stable = parse_nums_text(models.get("stable2", ""))
+    attack = parse_nums_text(models.get("attack3", ""))
+    burst = parse_nums_text(models.get("burst4", ""))
+
+    for n in mother:
+        if len(stable) < 5 and n not in stable:
+            stable.append(n)
+        if len(attack) < 8 and n not in attack:
+            attack.append(n)
+        if len(burst) < 10 and n not in burst:
+            burst.append(n)
+
+    for n in range(1, 40):
+        if len(mother) < 12 and n not in mother:
+            mother.append(n)
+        if len(stable) < 5 and n not in stable:
+            stable.append(n)
+        if len(attack) < 8 and n not in attack:
+            attack.append(n)
+        if len(burst) < 10 and n not in burst:
+            burst.append(n)
+        if len(mother) >= 12 and len(stable) >= 5 and len(attack) >= 8 and len(burst) >= 10:
+            break
+
+    models["motherboard"] = fmt_nums(mother[:12])
+    models["stable2"] = fmt_nums(stable[:5])
+    models["attack3"] = fmt_nums(attack[:8])
+    models["burst4"] = fmt_nums(burst[:10])
+
     note = json.dumps(models, ensure_ascii=False)
+
     with db_cursor(commit=True) as cur:
         cur.execute("""
             INSERT INTO daily_pick_cache (pick_date, numbers, hot_zone, top_hot, note, created_at)
@@ -884,6 +933,36 @@ def parse_models_from_note(note):
         data = json.loads(note or "{}")
         for k, v in fallback.items():
             data.setdefault(k, v)
+
+        mother = parse_nums_text(data.get("motherboard", ""))
+        stable = parse_nums_text(data.get("stable2", ""))
+        attack = parse_nums_text(data.get("attack3", ""))
+        burst = parse_nums_text(data.get("burst4", ""))
+
+        for n in mother:
+            if len(stable) < 5 and n not in stable:
+                stable.append(n)
+            if len(attack) < 8 and n not in attack:
+                attack.append(n)
+            if len(burst) < 10 and n not in burst:
+                burst.append(n)
+
+        for n in range(1, 40):
+            if len(mother) < 12 and n not in mother:
+                mother.append(n)
+            if len(stable) < 5 and n not in stable:
+                stable.append(n)
+            if len(attack) < 8 and n not in attack:
+                attack.append(n)
+            if len(burst) < 10 and n not in burst:
+                burst.append(n)
+            if len(mother) >= 12 and len(stable) >= 5 and len(attack) >= 8 and len(burst) >= 10:
+                break
+
+        data["motherboard"] = fmt_nums(mother[:12])
+        data["stable2"] = fmt_nums(stable[:5])
+        data["attack3"] = fmt_nums(attack[:8])
+        data["burst4"] = fmt_nums(burst[:10])
         return data
     except Exception:
         return fallback
