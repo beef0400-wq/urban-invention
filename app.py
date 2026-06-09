@@ -13,7 +13,7 @@ from datetime import datetime, timedelta, timezone, date
 from itertools import combinations
 
 app = Flask(__name__)
-APP_VERSION = "2026-05-20-clean-v539-wide-bingo-real-v2-cachefix"
+APP_VERSION = "2026-05-20-v540-tight-recovery-track"
 
 # ========= 環境變數 =========
 CHANNEL_ACCESS_TOKEN = os.getenv("CHANNEL_ACCESS_TOKEN", "").strip()
@@ -701,25 +701,72 @@ def hot_zone_539(draws):
     return hot_zone, ranked
 
 
+
+def recent_539_performance_state():
+    """依最近母盤命中狀態切換模型。
+    - recovery：最近母盤命中偏低，隔日加強反轉/冷號/遺漏值。
+    - normal：一般狀態。
+    """
+    try:
+        with db_cursor() as cur:
+            cur.execute("""
+                SELECT hit_count
+                FROM model_results
+                WHERE hit_count IS NOT NULL
+                ORDER BY result_date DESC
+                LIMIT 5;
+            """)
+            rows = cur.fetchall()
+        vals = [int(r[0]) for r in rows if r and r[0] is not None]
+        if len(vals) >= 3 and (sum(vals) / len(vals)) < 2.0:
+            return "recovery"
+        return "normal"
+    except Exception as e:
+        log("RECENT_539_PERFORMANCE_STATE_ERROR:", repr(e))
+        return "normal"
+
+
+def ensure_len_unique(nums, source, need):
+    out = []
+    for n in nums:
+        if 1 <= int(n) <= 39 and int(n) not in out:
+            out.append(int(n))
+        if len(out) >= need:
+            return out[:need]
+    for n in source:
+        if 1 <= int(n) <= 39 and int(n) not in out:
+            out.append(int(n))
+        if len(out) >= need:
+            return out[:need]
+    for n in range(1, 40):
+        if n not in out:
+            out.append(n)
+        if len(out) >= need:
+            return out[:need]
+    return out[:need]
+
 def build_539_models(draws):
-    seed = f"539-wide-{today_tw().isoformat()}"
-    fallback = [3, 5, 9, 10, 18, 21, 22, 24, 32, 33, 37, 38]
+    """539 強化縮盤版：
+    母盤 10 碼、2星 3 碼、3星 6 碼、4星 7 碼。
+    最近母盤命中偏低時，自動切換 recovery 模式，加重遺漏值/冷號與反轉補位。
+    """
+    mode = recent_539_performance_state()
+    seed = f"539-tight-{today_tw().isoformat()}-{mode}"
+    fallback = [3, 8, 9, 18, 21, 25, 30, 31, 37, 38]
 
     if not draws:
         return {
             "model_version": APP_VERSION,
+            "model_mode": mode,
             "motherboard": fmt_nums(fallback),
-            "stable2": "09 21 32 33 38",
-            "attack3": "03 09 18 21 24 32 33 38",
-            "burst4": "03 05 09 10 18 21 24 32 33 37",
-            "cold_note": "05 10 37",
-            "pattern_note": "資料不足，使用保守擴盤。",
+            "stable2": "09 30 31",
+            "attack3": "03 09 18 25 30 31",
+            "burst4": "03 08 09 18 21 30 31",
+            "cold_note": "25 37 38",
+            "pattern_note": "資料不足，使用縮盤保守模型。",
         }
 
-    d30 = draws[:30]
-    d60 = draws[:60]
-    d120 = draws[:120]
-    d240 = draws[:240]
+    d30, d60, d120, d240 = draws[:30], draws[:60], draws[:120], draws[:240]
     f30, f60, f120, f240 = freq_539(d30), freq_539(d60), freq_539(d120), freq_539(d240)
     gap_score, gap_raw = gap_539(d240)
 
@@ -727,95 +774,90 @@ def build_539_models(draws):
     ngap = normalize(gap_score)
 
     latest_set = set(draws[0][1])
+    prev3 = set()
+    for _, nums in draws[:3]:
+        prev3.update(nums)
+
     score = {}
     for n in range(1, 40):
-        repeat_penalty = -0.08 if n in latest_set else 0
-        score[n] = (
-            0.30 * nf30[n] +
-            0.18 * nf60[n] +
-            0.16 * nf120[n] +
-            0.08 * nf240[n] +
-            0.20 * ngap[n] +
-            repeat_penalty
-        )
+        repeat_penalty = -0.12 if n in latest_set else 0
+        short_repeat_penalty = -0.05 if n in prev3 else 0
+        if mode == "recovery":
+            score[n] = (
+                0.22 * nf30[n] +
+                0.12 * nf60[n] +
+                0.12 * nf120[n] +
+                0.06 * nf240[n] +
+                0.38 * ngap[n] +
+                repeat_penalty +
+                short_repeat_penalty
+            )
+        else:
+            score[n] = (
+                0.36 * nf30[n] +
+                0.18 * nf60[n] +
+                0.14 * nf120[n] +
+                0.06 * nf240[n] +
+                0.18 * ngap[n] +
+                repeat_penalty
+            )
 
     ranked = [n for n, _ in sorted(score.items(), key=lambda x: x[1], reverse=True)]
-    cold = [n for n, _ in sorted(gap_raw.items(), key=lambda x: x[1], reverse=True)[:8]]
-    pool = ranked[:30]
-    for n in cold[:4]:
+    cold_ranked = [n for n, _ in sorted(gap_raw.items(), key=lambda x: x[1], reverse=True)]
+
+    pool = ranked[:24]
+    for n in cold_ranked[:6 if mode == "recovery" else 3]:
         if n not in pool:
             pool.append(n)
 
-    motherboard = weighted_sample(pool, score, 12, seed)
+    mother = weighted_sample(pool, score, 10, seed)
 
-    # 至少每區約 3 顆
-    for zname, predicate in [
-        ("低", lambda x: 1 <= x <= 13),
-        ("中", lambda x: 14 <= x <= 26),
-        ("高", lambda x: 27 <= x <= 39),
-    ]:
-        while sum(1 for n in motherboard if predicate(n)) < 3:
-            add = next((n for n in ranked if predicate(n) and n not in motherboard), None)
+    # 區段平衡：10碼至少低/中/高各2顆，避免偏盤太極端。
+    for predicate in [lambda x: 1 <= x <= 13, lambda x: 14 <= x <= 26, lambda x: 27 <= x <= 39]:
+        while sum(1 for n in mother if predicate(n)) < 2:
+            add = next((n for n in ranked if predicate(n) and n not in mother), None)
             if add is None:
                 break
-            # 移除最多區最低分
-            counts = {
-                "低": [x for x in motherboard if x <= 13],
-                "中": [x for x in motherboard if 14 <= x <= 26],
-                "高": [x for x in motherboard if x >= 27],
-            }
-            over = max(counts, key=lambda k: len(counts[k]))
-            remove = min(counts[over], key=lambda x: score.get(x, 0))
-            motherboard.remove(remove)
-            motherboard.append(add)
+            # 移除目前最多區裡分數最低的號碼
+            groups = [
+                [x for x in mother if x <= 13],
+                [x for x in mother if 14 <= x <= 26],
+                [x for x in mother if x >= 27],
+            ]
+            over = max(groups, key=len)
+            remove = min(over, key=lambda x: score.get(x, 0))
+            mother.remove(remove)
+            mother.append(add)
 
-    motherboard = sorted(set(motherboard))
-    for n in ranked:
-        if len(motherboard) >= 12:
-            break
-        if n not in motherboard:
-            motherboard.append(n)
-    motherboard = sorted(motherboard[:12])
+    mother = ensure_len_unique(sorted(mother), ranked + cold_ranked, 10)
+    mb_ranked = sorted(mother, key=lambda n: score.get(n, 0), reverse=True)
 
-    mb_ranked = sorted(motherboard, key=lambda n: score[n], reverse=True)
-
-    # 2星主軸 5碼，盡量跨區
-    core = []
+    # 2星主軸：3碼，盡量跨區，保持集中。
+    stable = []
     used_zone = set()
     for n in mb_ranked:
         z = zone_539(n)
-        if z not in used_zone or len(core) >= 3:
-            core.append(n)
+        if z not in used_zone:
+            stable.append(n)
             used_zone.add(z)
-        if len(core) == 5:
+        if len(stable) >= 3:
             break
-    for n in mb_ranked:
-        if len(core) == 5:
-            break
-        if n not in core:
-            core.append(n)
+    stable = ensure_len_unique(stable, mb_ranked, 3)
 
-    attack = list(core)
-    for n in mb_ranked:
-        if n not in attack:
-            attack.append(n)
-        if len(attack) == 8:
-            break
+    # 3星主攻：6碼，主軸 + 高分延伸。
+    attack = ensure_len_unique(stable, mb_ranked, 6)
 
+    # 4星爆發：7碼，主攻 + 1~2 顆冷號補位。
     burst = list(attack)
-    for n in cold:
-        if n in motherboard and n not in burst:
+    for n in cold_ranked:
+        if n in mother and n not in burst:
             burst.append(n)
-        if len(burst) == 10:
+        if len(burst) >= 7:
             break
-    for n in mb_ranked:
-        if n not in burst:
-            burst.append(n)
-        if len(burst) == 10:
-            break
+    burst = ensure_len_unique(burst, mb_ranked + cold_ranked, 7)
 
-    cold_note_nums = [n for n in motherboard if gap_raw.get(n, 0) >= 8]
-    cold_note = fmt_nums(cold_note_nums[:4]) if cold_note_nums else fmt_nums(cold[:3])
+    cold_note_nums = [n for n in mother if gap_raw.get(n, 0) >= 8]
+    cold_note = fmt_nums(cold_note_nums[:4]) if cold_note_nums else fmt_nums(cold_ranked[:3])
 
     latest_nums = draws[0][1]
     head_note = "｜".join([f"{h}頭{sum(1 for n in latest_nums if n//10==h)}顆" for h in range(4)])
@@ -823,22 +865,24 @@ def build_539_models(draws):
     for n in latest_nums:
         tail_count[n % 10] = tail_count.get(n % 10, 0) + 1
     tail_note = "｜".join(f"{t}尾{c}顆" for t, c in sorted(tail_count.items()))
+    mode_text = "回補修正盤：近期母盤命中偏低，今日加重冷號/遺漏值。" if mode == "recovery" else "一般縮盤：短期熱度搭配遺漏值，降低號碼分散。"
 
     return {
         "model_version": APP_VERSION,
-        "motherboard": fmt_nums(motherboard),
-        "stable2": fmt_nums(core),
+        "model_mode": mode,
+        "motherboard": fmt_nums(mother),
+        "stable2": fmt_nums(stable),
         "attack3": fmt_nums(attack),
         "burst4": fmt_nums(burst),
         "cold_note": cold_note,
         "pattern_note": (
+            f"模式：{mode_text}\n"
             f"頭數：{head_note}\n"
             f"尾數：{tail_note}\n"
-            f"區段：{structure_539(fmt_nums(motherboard))}\n"
-            "策略：12碼擴盤，提高覆蓋率；主軸5碼抓2星，8碼抓3星，10碼抓4星。"
+            f"區段：{structure_539(fmt_nums(mother))}\n"
+            "策略：10碼縮盤；2星抓3碼主軸，3星用6碼主攻，4星用7碼爆發。"
         ),
     }
-
 
 def get_or_build_today_pick_539():
     """
@@ -879,36 +923,36 @@ def get_or_build_today_pick_539():
     models["latest_draw_date"] = latest_date.strftime("%Y-%m-%d") if latest_date else "無"
     models["data_stale_days"] = stale_days
 
-    # 硬性防呆：確保輸出顆數一定是 12 / 5 / 8 / 10
+    # 硬性防呆：確保輸出顆數一定是 10 / 3 / 6 / 7
     mother = parse_nums_text(models.get("motherboard", ""))
     stable = parse_nums_text(models.get("stable2", ""))
     attack = parse_nums_text(models.get("attack3", ""))
     burst = parse_nums_text(models.get("burst4", ""))
 
     for n in mother:
-        if len(stable) < 5 and n not in stable:
+        if len(stable) < 3 and n not in stable:
             stable.append(n)
-        if len(attack) < 8 and n not in attack:
+        if len(attack) < 6 and n not in attack:
             attack.append(n)
-        if len(burst) < 10 and n not in burst:
+        if len(burst) < 7 and n not in burst:
             burst.append(n)
 
     for n in range(1, 40):
-        if len(mother) < 12 and n not in mother:
+        if len(mother) < 10 and n not in mother:
             mother.append(n)
-        if len(stable) < 5 and n not in stable:
+        if len(stable) < 3 and n not in stable:
             stable.append(n)
-        if len(attack) < 8 and n not in attack:
+        if len(attack) < 6 and n not in attack:
             attack.append(n)
-        if len(burst) < 10 and n not in burst:
+        if len(burst) < 7 and n not in burst:
             burst.append(n)
-        if len(mother) >= 12 and len(stable) >= 5 and len(attack) >= 8 and len(burst) >= 10:
+        if len(mother) >= 10 and len(stable) >= 3 and len(attack) >= 6 and len(burst) >= 7:
             break
 
-    models["motherboard"] = fmt_nums(mother[:12])
-    models["stable2"] = fmt_nums(stable[:5])
-    models["attack3"] = fmt_nums(attack[:8])
-    models["burst4"] = fmt_nums(burst[:10])
+    models["motherboard"] = fmt_nums(mother[:10])
+    models["stable2"] = fmt_nums(stable[:3])
+    models["attack3"] = fmt_nums(attack[:6])
+    models["burst4"] = fmt_nums(burst[:7])
 
     note = json.dumps(models, ensure_ascii=False)
 
@@ -940,29 +984,29 @@ def parse_models_from_note(note):
         burst = parse_nums_text(data.get("burst4", ""))
 
         for n in mother:
-            if len(stable) < 5 and n not in stable:
+            if len(stable) < 3 and n not in stable:
                 stable.append(n)
-            if len(attack) < 8 and n not in attack:
+            if len(attack) < 6 and n not in attack:
                 attack.append(n)
-            if len(burst) < 10 and n not in burst:
+            if len(burst) < 7 and n not in burst:
                 burst.append(n)
 
         for n in range(1, 40):
-            if len(mother) < 12 and n not in mother:
+            if len(mother) < 10 and n not in mother:
                 mother.append(n)
-            if len(stable) < 5 and n not in stable:
+            if len(stable) < 3 and n not in stable:
                 stable.append(n)
-            if len(attack) < 8 and n not in attack:
+            if len(attack) < 6 and n not in attack:
                 attack.append(n)
-            if len(burst) < 10 and n not in burst:
+            if len(burst) < 7 and n not in burst:
                 burst.append(n)
-            if len(mother) >= 12 and len(stable) >= 5 and len(attack) >= 8 and len(burst) >= 10:
+            if len(mother) >= 10 and len(stable) >= 3 and len(attack) >= 6 and len(burst) >= 7:
                 break
 
-        data["motherboard"] = fmt_nums(mother[:12])
-        data["stable2"] = fmt_nums(stable[:5])
-        data["attack3"] = fmt_nums(attack[:8])
-        data["burst4"] = fmt_nums(burst[:10])
+        data["motherboard"] = fmt_nums(mother[:10])
+        data["stable2"] = fmt_nums(stable[:3])
+        data["attack3"] = fmt_nums(attack[:6])
+        data["burst4"] = fmt_nums(burst[:7])
         return data
     except Exception:
         return fallback
@@ -977,7 +1021,7 @@ def update_latest_model_result():
         d, actual = draws[0]
         with db_cursor() as cur:
             cur.execute("""
-                SELECT numbers
+                SELECT numbers, note
                 FROM daily_pick_cache
                 WHERE pick_date <= %s
                 ORDER BY pick_date DESC
@@ -986,8 +1030,13 @@ def update_latest_model_result():
             row = cur.fetchone()
         if not row:
             return None
-        mb = row[0]
-        hit = len(set(parse_nums_text(mb)) & set(actual))
+        mb, note = row
+        m = parse_models_from_note(note)
+        actual_set = set(actual)
+        mother_hit = len(set(parse_nums_text(m.get("motherboard", mb))) & actual_set)
+        stable_hit = len(set(parse_nums_text(m.get("stable2", ""))) & actual_set)
+        attack_hit = len(set(parse_nums_text(m.get("attack3", ""))) & actual_set)
+        burst_hit = len(set(parse_nums_text(m.get("burst4", ""))) & actual_set)
         actual_text = fmt_nums(actual)
         with db_cursor(commit=True) as cur:
             cur.execute("""
@@ -998,16 +1047,22 @@ def update_latest_model_result():
                     actual_numbers=EXCLUDED.actual_numbers,
                     hit_count=EXCLUDED.hit_count,
                     created_at=EXCLUDED.created_at;
-            """, (d, mb, actual_text, hit, now_tw()))
-        return {"date": d, "actual": actual_text, "hit": hit}
+            """, (d, m.get("motherboard", mb), actual_text, mother_hit, now_tw()))
+        return {
+            "date": d,
+            "actual": actual_text,
+            "mother_hit": mother_hit,
+            "stable_hit": stable_hit,
+            "attack_hit": attack_hit,
+            "burst_hit": burst_hit,
+        }
     except Exception as e:
         log("UPDATE_539_RESULT_ERROR:", repr(e))
         return None
 
-
 def latest_model_result_text():
     try:
-        update_latest_model_result()
+        result = update_latest_model_result()
         with db_cursor() as cur:
             cur.execute("""
                 SELECT result_date, actual_numbers, hit_count
@@ -1027,11 +1082,17 @@ def latest_model_result_text():
                 f"目前最新追蹤停在 {d.strftime('%Y.%m.%d')}，已超過{stale}天。\n"
                 "系統不顯示過期命中，請確認539資料源是否有更新。\n"
             )
-        return f"\n▍最近母盤追蹤\n{d.strftime('%Y.%m.%d')}｜命中{hit}顆\n開獎：{actual}\n"
+        if result and result.get("date") == d:
+            return (
+                "\n▍最近模型追蹤\n"
+                f"{d.strftime('%Y.%m.%d')}｜開獎：{actual}\n"
+                f"母盤命中：{result.get('mother_hit', hit)}顆\n"
+                f"2星主軸：{result.get('stable_hit', 0)}顆｜3星主攻：{result.get('attack_hit', 0)}顆｜4星爆發：{result.get('burst_hit', 0)}顆\n"
+            )
+        return f"\n▍最近母盤追蹤\n{d.strftime('%Y.%m.%d')}｜母盤命中{hit}顆\n開獎：{actual}\n"
     except Exception as e:
         log("LATEST_RESULT_TEXT_ERROR:", repr(e))
         return ""
-
 
 def format_today_companion():
     try:
@@ -1044,18 +1105,18 @@ def format_today_companion():
                 "\n▍資料提醒\n"
                 f"539資料目前停在：{m.get('latest_draw_date', '無')}\n"
                 f"距今：約{m.get('data_stale_days', '未知')}天\n"
-                "本期先以歷史模型擴盤，不顯示過期命中。\n"
+                "本期先以歷史模型縮盤，不顯示過期命中。\n"
             )
 
         return (
-            "【今日539 AI強化母盤】\n\n"
-            "▍核心母盤（12碼）\n"
+            "【今日539 AI縮盤修正版】\n\n"
+            "▍核心母盤（10碼）\n"
             f"{m['motherboard']}\n\n"
-            "▍主軸號｜2星擴盤\n"
+            "▍主軸號｜2星穩定（3碼）\n"
             f"{m['stable2']}\n\n"
-            "▍3星主攻\n"
+            "▍3星主攻（6碼）\n"
             f"{m['attack3']}\n\n"
-            "▍4星爆發\n"
+            "▍4星爆發（7碼）\n"
             f"{m['burst4']}\n\n"
             "▍結構分析\n"
             f"{structure_539(m['motherboard'])}\n"
@@ -1067,17 +1128,16 @@ def format_today_companion():
             "▍型態判斷\n"
             f"{m.get('pattern_note', '')}\n\n"
             "▍策略解讀\n"
-            "主軸號：由3碼擴成5碼，提高2星覆蓋。\n"
-            "3星主攻：由5碼擴成8碼，主軸加延伸號抓主要節奏。\n"
-            "4星爆發：由8碼擴成10碼，加入冷號與型態補位。\n\n"
+            "2星：縮回3碼主軸，避免過度分散。\n"
+            "3星：6碼主攻，保留主軸並加入延伸號。\n"
+            "4星：7碼爆發，加入冷號與型態補位，但不再過度擴盤。\n\n"
             "▍AI陪跑語錄\n"
             f"{get_daily_quote()}\n\n"
             "（數據結構參考，非保證）"
         )
     except Exception as e:
         log("FORMAT_539_ERROR:", repr(e))
-        return "【今日539 AI強化母盤】\n\n核心母盤（12碼）\n03 05 09 10 18 21 22 24 32 33 37 38"
-
+        return "【今日539 AI縮盤修正版】\n\n核心母盤（10碼）\n03 08 09 18 21 25 30 31 37 38"
 
 def format_539_push():
     return format_today_companion().replace("【今日539 AI強化母盤】", "【理性陪跑研究室｜539 AI強化母盤】")
@@ -1443,11 +1503,13 @@ def build_bet_plan(total, mode="balanced"):
 
     pack = get_or_build_today_pick_539()
     m = parse_models_from_note(pack["note"])
-    two = parse_nums_text(m["stable2"])[:5]
-    three = parse_nums_text(m["attack3"])[:8]
-    four = parse_nums_text(m["burst4"])[:10]
+    two = parse_nums_text(m["stable2"])[:3]
+    three = parse_nums_text(m["attack3"])[:6]
+    four = parse_nums_text(m["burst4"])[:7]
 
-    c2, c3, c4 = len(list(combinations(two, 2))), len(list(combinations(three, 3))), len(list(combinations(four, 4)))
+    c2 = len(list(combinations(two, 2)))
+    c3 = len(list(combinations(three, 3)))
+    c4 = len(list(combinations(four, 4)))
     amt2 = int(total * p2)
     amt3 = int(total * p3)
     amt4 = total - amt2 - amt3
@@ -1469,7 +1531,7 @@ def build_bet_plan(total, mode="balanced"):
         "高本金：4星放大，但不追單\n\n"
         "▍使用號碼（直接照下）\n\n"
         f"2星：{fmt_nums(two)}\n"
-        "👉 選5顆，全碰\n"
+        "👉 選3顆，全碰\n"
         f"{pairs}\n"
         f"共{c2}碰\n\n"
         f"3星：{fmt_nums(three)}\n"
@@ -1482,12 +1544,10 @@ def build_bet_plan(total, mode="balanced"):
         f"3星：每碰 {money(per3)} × {c3}碰 = {money(real3)}\n"
         f"4星：每碰 {money(per4)} × {c4}碰 = {money(real4)}\n\n"
         f"實際投入：約 {money(real2 + real3 + real4)} 點\n\n"
-        "擴盤版本碰數較多，小本金建議主打2星與3星。\n"
+        "縮盤版本碰數較少，點數更集中。\n"
         "（點數配置僅供策略參考）"
     )
 
-
-# ========= 其他文案 =========
 def format_help_message():
     return (
         "【功能選單】\n\n"
