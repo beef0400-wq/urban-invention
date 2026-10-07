@@ -1,0 +1,20 @@
+name: V2 daily lock and reconcile
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 10 * * 1-6'
+    - cron: '0 13 * * 1-6'
+jobs:
+  maintain:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Maintain isolated test forecasts
+        env:
+          TEST_BASE_URL: ${{ vars.TEST_BASE_URL }}
+          CRON_SECRET: ${{ secrets.V2_TEST_CRON_SECRET }}
+        run: |
+          test -n "$TEST_BASE_URL" && test -n "$CRON_SECRET"
+          curl --fail --max-time 120 --get --data-urlencode "secret=$CRON_SECRET" "$TEST_BASE_URL/cron/update-539-result"
+          if [ "$(date -u +%H)" -lt 12 ]; then
+            curl --fail --max-time 120 --get --data-urlencode "secret=$CRON_SECRET" "$TEST_BASE_URL/cron/daily-push"
+          fi

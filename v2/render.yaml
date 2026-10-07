@@ -1,0 +1,21 @@
+services:
+  - type: web
+    name: ai-rational-companion-v1-test
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn app:app --bind 0.0.0.0:$PORT --workers 1 --threads 4 --timeout 120
+    healthCheckPath: /health
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: CHANNEL_ACCESS_TOKEN
+        sync: false
+      - key: CHANNEL_SECRET
+        sync: false
+      - key: CRON_SECRET
+        sync: false
+      - key: ADMIN_SECRET
+        sync: false
+      - key: ADMIN_USER_IDS
+        sync: false

@@ -1,0 +1,7 @@
+flask
+requests
+gunicorn
+psycopg2-binary
+
+numpy
+opencv-python-headless
