@@ -54,3 +54,9 @@ Earlier verified V2 deploy: dep-db3ktd7avr4c73a7ksd0, runtime 6ab7574.
 Prefer application rollback preserving added tables. Do not drop member/history data.
 Original cross-repository source: ai-rational-companion-v1 / main, live dep-dami3jf40ujc73b1ada0. Returning to that source needs restoring repo/branch/build/start settings; do not assume cross-repository one-click rollback.
 See ROLLBACK.md and deployment/test_db_baseline.json.
+
+## Phone acceptance 2026-10-08 17:48+08
+- Owner screenshot confirms actual LINE 主選單 receive/reply and 確認開始 analysis with next-round quick replies.
+- Found zero signal index still displaying direction; presentation now shows 觀望 when index=0. Public decision card uses 紅/藍 throughout and labels correlated rules 訊號彙整. Core scores/directions unchanged.
+- 37 local tests pass, including zero-index presentation regression and existing core equivalence.
+- Real image calibration and remaining modes/phone steps still pending.

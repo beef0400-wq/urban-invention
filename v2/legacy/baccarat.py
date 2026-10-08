@@ -1401,7 +1401,7 @@ def decision_card(user, analysis):
     signal = analysis.get("signal", "弱")
     direction = analysis.get("direction", "莊")
     state = analysis.get("state", "")
-    if "暫停" in state or (signal == "弱" and risk in ["中高", "高"]):
+    if idx == 0 or "暫停" in state or (signal == "弱" and risk in ["中高", "高"]):
         headline = "觀望"
     else:
         headline = direction
@@ -1423,7 +1423,7 @@ def decision_card(user, analysis):
         f"⚠️ 風險：{risk}\n"
         f"📈 路況：{analysis.get('road_name','—')}\n\n"
         "━━━━━━━━━━━━━━━\n"
-        "🗳️ 模型共識｜五項訊號\n"
+        "🗳️ 訊號彙整｜五項訊號\n"
         f"🔴 莊 {consensus.get('莊',0)}｜🔵 閒 {consensus.get('閒',0)}｜⚪ 中性 {consensus.get('中性',0)}\n\n"
         + "\n".join(ev_lines) + f"\n支持訊號：{support}\n反向訊號：{opposing}\n訊號指數是規則分數，不是勝率；訊號彼此相關，不代表獨立模型。\n\n"
         "━━━━━━━━━━━━━━━\n"
@@ -1433,7 +1433,7 @@ def decision_card(user, analysis):
         f"最近牌路：{preview}\n\n"
         "下一局開完後，只要按一次【🔴紅／🔵藍／🟢和】，AI 會立即重算。\n"
         "需要更多資料再按【詳細分析】。"
-    )
+    ).replace("莊", "紅").replace("閒", "藍")
 
 def detail_card(user, analysis):
     points = calculate_points(user, analysis)

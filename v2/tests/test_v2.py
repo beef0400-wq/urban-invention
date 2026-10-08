@@ -35,7 +35,7 @@ def test_batch_confirm_and_one_click(isolate):
     send('修正 2 紅');assert store.get_state('U1')['pending']['sequence'][1]=='莊'
     send('確認開始');u=ba.get_user('U1');n=len(u['current_road']);assert u['analysis_active']
     send('紅');u=ba.get_user('U1');assert len(u['current_road'])==n+1 and u['pending_flow'] is None
-    assert all(k in isolate[-1][0] for k in ('綜合判讀','訊號指數','模型共識','支持訊號','反向訊號','風險','路況','即時數據'))
+    assert all(k in isolate[-1][0] for k in ('綜合判讀','訊號指數','訊號彙整','支持訊號','反向訊號','風險','路況','即時數據'))
     assert len(store.history('U1'))>=1
 
 def test_button_import_starts_once():
@@ -262,3 +262,15 @@ def test_scheduler_cutoff_and_catchup(monkeypatch):
     assert calls==['lock']
     scheduler.tick(datetime(2026,10,8,22,tzinfo=lo.TZ_TW))
     assert calls==['lock','refresh','verify']
+
+
+def test_zero_signal_card_observes_and_uses_public_labels():
+    user={'current_road':['莊','閒']*8}
+    analysis={'signal_index':0,'signal':'弱','risk':'中','direction':'莊',
+              'state':'中性','evidence':[('近期比例','閒','莊7 / 閒10')],
+              'consensus':{'莊':0,'閒':1,'中性':0},'metrics':{'莊':7,'閒':10,'和':1}}
+    card=ba.decision_card(user,analysis)
+    assert '綜合判讀：觀望' in card
+    assert '莊' not in card and '閒' not in card
+    assert '紅7 / 藍10' in card and '訊號彙整' in card
+    assert analysis['direction']=='莊'
