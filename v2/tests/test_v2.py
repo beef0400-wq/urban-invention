@@ -218,3 +218,47 @@ def test_bingo_markup_and_date_required(monkeypatch):
     assert len(rows)==1 and rows[0]['numbers']==list(range(1,21)) and rows[0]['date']==date(2026,10,8)
     response.text = response.text.replace('2026/10/8 BINGO', '')
     assert lo.fetch_recent_bingo_results()==[]
+
+
+def test_new_postgres_member_has_no_separate_trial(monkeypatch):
+    from contextlib import contextmanager
+    class Cursor:
+        def __init__(self): self.inserted=False; self.args=None
+        def __enter__(self): return self
+        def __exit__(self,*args): pass
+        def execute(self,sql,args):
+            if 'INSERT INTO users' in sql:
+                self.inserted=True; self.args=args
+        def fetchone(self): return ba.default_user('db-new') if self.inserted else None
+    cur=Cursor()
+    class Connection:
+        def cursor(self): return cur
+        def commit(self): pass
+    @contextmanager
+    def connection(): yield Connection()
+    monkeypatch.setattr(ba,'use_db',lambda:True)
+    monkeypatch.setattr(ba,'db_conn',connection)
+    user=ba.ensure_user('db-new')
+    assert cur.args[1:3]==(None,None)
+    assert user['trial_started_at'] is None and user['trial_end_at'] is None
+
+
+
+def test_scheduler_cutoff_and_catchup(monkeypatch):
+    import scheduled_verification as scheduler
+    calls=[]
+    monkeypatch.setattr(verification,'locked_pack',lambda d:None)
+    monkeypatch.setattr(lo,'get_or_build_today_pick_539',lambda:calls.append('lock'))
+    monkeypatch.setattr(lo,'ensure_latest_539_in_db',lambda:calls.append('refresh'))
+    monkeypatch.setattr(lo,'load_539_draws',lambda n:[])
+    monkeypatch.setattr(verification,'reconcile',lambda rows:calls.append('verify') or 0)
+    scheduler.tick(datetime(2026,10,8,17,tzinfo=lo.TZ_TW))
+    assert calls==[]
+    scheduler.tick(datetime(2026,10,8,18,tzinfo=lo.TZ_TW))
+    assert calls==['lock']
+    scheduler.tick(datetime(2026,10,8,18,1,tzinfo=lo.TZ_TW))
+    assert calls==['lock']
+    scheduler.tick(datetime(2026,10,8,20,30,tzinfo=lo.TZ_TW))
+    assert calls==['lock']
+    scheduler.tick(datetime(2026,10,8,22,tzinfo=lo.TZ_TW))
+    assert calls==['lock','refresh','verify']

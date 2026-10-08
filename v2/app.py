@@ -336,7 +336,7 @@ def home():
 
 @app.get("/health")
 def health():
-    return {"ok": True, "version": APP_VERSION}
+    return {"ok": True, "version": APP_VERSION, "verification_scheduler": bool(VERIFICATION_SCHEDULER)}
 
 
 @app.post("/webhook")
@@ -437,6 +437,8 @@ def initialize():
     membership.init_db()
 
 initialize()
+import scheduled_verification
+VERIFICATION_SCHEDULER = scheduled_verification.start()
 
 if __name__ == "__main__":
     membership.init_db()
