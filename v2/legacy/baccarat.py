@@ -1413,7 +1413,7 @@ def decision_card(user, analysis):
 
     support = "、".join(name for name,vote,_ in evidence if vote==direction) or "無明顯支持"
     opposing = "、".join(name for name,vote,_ in evidence if vote not in (direction,"中性")) or "無明顯反向"
-    plain_observation = "目前訊號不足，先保留判斷。" if headline == "觀望" else f"目前規則偏向{direction}，仍有反向訊號需核對。"
+    plain_observation = "目前訊號不足，先保留判斷。" if headline == "觀望" else f"目前規則偏向{direction}，仍需留意訊號限制。"
     plain_reason = f"支持依據：{support}。反向依據：{opposing}。"
     road = main_only(user.get("current_road", []))
     preview = road_to_text(road[-24:], 24) if road else "—"

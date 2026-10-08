@@ -5,7 +5,7 @@ Backend deployed; owner-authorized research OA connected and LINE official verif
 Date: 2026-10-08 Asia/Taipei.
 Repository: beef0400-wq/urban-invention.
 Branch: v2-rational-companion-test-20261007.
-Runtime commit: 71f31783204ca08ddb004f5aaf368cf98bdd4292.
+Runtime candidate: Experience V2.3.
 Service: srv-dami3j740ujc73b1acfg.
 Test DB: dpg-damhkgou01pc73aadrr0-a.
 URL: https://ai-rational-companion-v1-test.onrender.com
@@ -80,3 +80,5 @@ See ROLLBACK.md and deployment/test_db_baseline.json.
 - Admin member-button flow: recent inactive bound accounts, 3/7/30 days, explicit final confirmation; admin auth checked each step and account identity rechecked. Existing /vip remains supported.
 - 47 local tests pass including undo state restoration, cancel, stale preview, ambiguous alignment, cross-mode resume, Bingo windows and admin confirmation/access revocation.
 - LINE startup validates 12 representative UI cases without sending messages. Mobile visual acceptance remains needed.
+
+- Remote isolated Postgres experience smoke PASS at 2026-10-08 16:08:45Z (undo/correction/resume/home/tracking). LINE validated 12 representative UI cases and 3 actual router replies. Synthetic identity was cleaned; verification marker prevents repeated experience smoke on restart.
