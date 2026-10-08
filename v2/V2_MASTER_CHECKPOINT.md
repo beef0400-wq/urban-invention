@@ -1,11 +1,11 @@
 # AI理性陪跑 V2｜MASTER CHECKPOINT
 
 ## CURRENT
-Backend test deployment verified; LINE mobile acceptance BLOCKED by unconfirmed OA routing.
+Backend deployed; owner-authorized research OA connected and LINE official verification PASS (HTTP 200). Phone acceptance pending.
 Date: 2026-10-08 Asia/Taipei.
 Repository: beef0400-wq/urban-invention.
 Branch: v2-rational-companion-test-20261007.
-Runtime commit: f81914ce6cc4117716526729ec89604faa7bb56c.
+Runtime commit: e50371d943d49a64a1c86fd8eeadc00f75e19eab.
 Service: srv-dami3j740ujc73b1acfg.
 Test DB: dpg-damhkgou01pc73aadrr0-a.
 URL: https://ai-rational-companion-v1-test.onrender.com
@@ -26,14 +26,14 @@ URL: https://ai-rational-companion-v1-test.onrender.com
 - Remote real history: 539 240 draws (2026-01-05 through 2026-10-07); Bingo 109 verified source draws at latest smoke.
 - 2026-10-08 forecast locked at 16:06:42+08, SHA256 07dcccee4cf107738ecd672bbe451d0d2ce68c6b3cc3d3e1b4b3df405e7dee8e. Actual=NULL pending tonight's draw.
 - Free runtime scheduler: attempts pre-draw locking from 18:00 until 20:00; reconciles from 21:00, every 5 minutes while instance is alive. Awakening catches up results; never backfills late predictions.
-- LINE credentials valid (bot/info 200). OA: AI理性陪跑研究室 @957ridwt. Webhook active but does not match test URL; unchanged.
+- LINE credentials valid (bot/info 200). OA: AI理性陪跑研究室 @957ridwt. Owner explicitly approved dedicated new-program use; webhook now matches V2, active=true. LINE webhook/test success=true and HTTP 200 at 09:35:10Z. Previous endpoint stored in v2_state key __v2_line_connection__ for rollback; do not print it.
 
 ## DOING
 - DONE: Final clean-start deploy dep-db3l08navr4c73a7vg6g LIVE at 2026-10-08 08:12:12Z; no repeated startup smoke. /health 200 with verification_scheduler=true; cron calls without secrets 403.
-- Save final report and evidence after health/live confirmation.
+- Connection deployment dep-db3m78c9v7es73dknej0 LIVE. Normal start restored (no configure_line.py); clean deployment dep-db3m8449v7es73dkqvr0 LIVE at 09:37:15Z.
 
 ## BLOCKED / LIMITS
-- Need owner confirmation that @957ridwt is a dedicated test OA allowed to change webhook, or supply a separate test OA. Do not redirect existing production traffic without confirmation.
+- Owner confirmation complete; no further OA authorization needed.
 - Real LINE receive/reply/image-download and phone acceptance NOT TESTED.
 - Need 3–5 real bead-plate road screenshots for platform calibration; synthetic images are not evidence of cross-platform accuracy.
 - Tonight's actual draw reconciliation cannot be verified before the draw.
@@ -43,8 +43,8 @@ URL: https://ai-rational-companion-v1-test.onrender.com
 ## NEXT
 1. Confirm clean-start deployment live and /health scheduler=true.
 2. Persist report / screenshot; push checkpoint / README / rollback updates.
-3. Ask only for concrete OA routing confirmation and real screenshots.
-4. After OA confirmation: route authorized test channel, run LINE verify and owner phone script.
+3. Obtain real screenshots for platform calibration.
+4. OA routing and LINE verify complete; owner sends 主選單 for real phone acceptance.
 5. Observe real post-draw reconciliation; check locked hash and same-date result preservation.
 6. Production migration/switch requires separate snapshots, member merge and owner approval.
 

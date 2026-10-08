@@ -36,4 +36,4 @@ python -m pytest -q
 ## 2026-10-08 Render verified update
 36 local tests PASS; remote Postgres router/duplicate-event smoke PASS. Real 539 240 draws and Bingo 109 source-verified draws loaded. Fixed nullable new-member trial dates.
 Runtime auto-verification is active only on the isolated test service: locking 18:00–20:00, reconciliation after21:00, every5minutes while alive; idle sleep catches up upon awakening and never fabricates late forecasts. This is not an always-on production scheduler SLA.
-LINE @957ridwt credentials valid; its webhook still points elsewhere. Owner must identify/authorize a dedicated test OA before phone acceptance.
+LINE @957ridwt (AI理性陪跑研究室): owner authorized new-program use on 2026-10-08; V2 webhook active and official verification HTTP 200. Real phone receive/reply and image acceptance remain pending.
