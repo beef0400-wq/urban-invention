@@ -84,3 +84,17 @@ See ROLLBACK.md and deployment/test_db_baseline.json.
 - Remote isolated Postgres experience smoke PASS at 2026-10-08 16:08:45Z (undo/correction/resume/home/tracking). LINE validated 12 representative UI cases and 3 actual router replies. Synthetic identity was cleaned; verification marker prevents repeated experience smoke on restart.
 
 - Final deployment dep-db3s0iegekts73fv9m80 LIVE at 2026-10-08 16:10:58Z. /health 200, version INTEGRATED-V2.3-EXPERIENCE-TEST and verification_scheduler=true. 47 tests PASS. Normal restart skips previously verified experience smoke.
+
+
+## 甦贏 V2.4 mobile portal (2026-10-09 Asia/Taipei)
+Owner approved new brand 甦贏 and LINE -> full mobile website, simple first layer with deeper analysis.
+- Additive Flask portal at existing service root. LINE command 開啟甦贏 issues one-use 10-minute login link; 8-hour HttpOnly Secure SameSite cookie, CSRF on mutations. Never accepts a browser-supplied LINE user ID.
+- Shared gateway reply capture uses ContextVar (no global monkeypatch); shared member/model/table storage. Web request dedup cache is per authenticated session and request ID. Same single-worker limits apply.
+- Homepage registration/member, large baccarat/539, smaller Bingo, monthly/weekly campaigns, resume active table. Existing registration address retained from legacy source: https://AI001.aaawin88.com.
+- Baccarat upload + conservative recognition preview, manual/batch input, live buttons, undo, correction, table choices. Full analysis expandable. Core algorithm unchanged.
+- 539 large actions, mother number chips, expandable full model/combination reasons, original reconciliation reports, private favorite numbers (<=10, not prediction inputs).
+- Bingo original source/freshness/window checks and full text retained in expandable sections.
+- Admin-only campaign manager: image uploads reencoded JPEG, date scheduling in Taipei, preview then publish, separate draft/live records, expiry/hide, builtin destinations. Homepage Bingo size toggle. Empty activity state until owner supplies images.
+- 55 local tests planned/checked including identity expiry, CSRF, shared trial/table/undo, dedup, cross-user isolation, drafts/private images, publish/expiry, favorite limits and admin revocation.
+- Startup validates 13 LINE message formats including URI portal entry; isolated portal Postgres smoke sends no LINE messages and cleans its synthetic identity.
+- Deployment/browser verification in progress; owner phone acceptance pending. OA display name/rich menu artwork have not been changed.

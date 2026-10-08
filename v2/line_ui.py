@@ -3,11 +3,11 @@ import json
 import re
 
 INK='#15243B'; MUTED='#66768B'; BG='#F3F6FA'
-THEMES={'baccarat':('百家 AI','#2478B8','路單觀察 · 多訊號分析'),
-        '539':('539 AI','#087F78','每日模型 · 開獎追蹤'),
-        'bingo':('Bingo AI','#7255C6','即時資料 · 趨勢觀察'),
+THEMES={'baccarat':('百家實戰','#2478B8','路單觀察 · 多訊號分析'),
+        '539':('539 好懂看盤','#087F78','每日模型 · 開獎追蹤'),
+        'bingo':('賓果看盤','#7255C6','即時資料 · 趨勢觀察'),
         'member':('會員中心','#405A7A','一個會員 · 三種模式'),
-        'home':('AI 理性陪跑','#405A7A','研究室 · 決策輔助')}
+        'home':('甦贏','#405A7A','看數據 · 看懂再上場')}
 
 def txt(text,size='sm',color=INK,bold=False):
     node={'type':'text','text':str(text) or '—','size':size,'color':color,'wrap':True,'flex':0}
@@ -24,12 +24,15 @@ def theme(text):
 
 def public_text(text):
     # Names are translated only for display. Event actions keep internal commands.
-    return str(text).replace('莊','紅').replace('閒','藍').replace('baccarat','百家').replace('bingo','賓果')
+    return str(text).replace('AI 理性陪跑','甦贏').replace('AI理性陪跑','甦贏').replace('百家 AI','百家實戰').replace('539 AI','539 好懂看盤').replace('Bingo AI','賓果看盤').replace('莊','紅').replace('閒','藍').replace('baccarat','百家').replace('bingo','賓果')
+
+def action(label,value):
+    return {'type':'uri','label':public_text(label)[:20],'uri':value} if value.startswith('https://') else {'type':'message','label':public_text(label)[:20],'text':value}
 
 def button(label,value,color,primary=False):
     return {'type':'button','style':'primary' if primary else 'secondary','height':'sm',
             **({'color':color} if primary else {}),
-            'action':{'type':'message','label':public_text(label)[:20],'text':value},'flex':1}
+            'action':action(label,value),'flex':1}
 
 def footer(items,color):
     rows=[]
@@ -118,5 +121,5 @@ def build_messages(text,quick_items=None):
     if len(messages)>5 or any(len(json.dumps(m,ensure_ascii=False).encode())>48000 for m in messages):
         messages=[{'type':'text','text':raw[i:i+4800]} for i in range(0,len(raw),4800)][:5]
     if quick_items:
-        messages[-1]['quickReply']={'items':[{'type':'action','action':{'type':'message','label':public_text(a)[:20],'text':b}} for a,b in quick_items[:13]]}
+        messages[-1]['quickReply']={'items':[{'type':'action','action':action(a,b)} for a,b in quick_items[:13]]}
     return messages

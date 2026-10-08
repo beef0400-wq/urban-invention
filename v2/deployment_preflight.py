@@ -79,3 +79,6 @@ if __name__ == '__main__':
     validate_ui()
     from experience_smoke import main as check_experience
     check_experience()
+
+    from portal_smoke import main as check_portal
+    check_portal()

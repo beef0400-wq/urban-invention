@@ -19,8 +19,8 @@ def test_all_screens_have_native_actions_and_fit_line_limits():
             for n in walk(m):
                 if n.get('type')=='bubble':assert len(json.dumps(n,ensure_ascii=False).encode())<30000
                 if n.get('type')=='text':assert n['wrap'] is True and n.get('maxLines') is None
-        actions=[n for n in walk(messages) if n.get('type')=='message']
-        assert set(b for _,b in items)<=set(n['text'] for n in actions)
+        actions=[n for n in walk(messages) if n.get('type') in ('message','uri')]
+        assert set(b for _,b in items)<=set(n.get('text') or n.get('uri') for n in actions)
 
 def test_numeric_chip_content_and_long_report_are_preserved():
     nums='01 02 03 04 05 06 07 08 09 10'

@@ -4,7 +4,7 @@ import hmac
 import base64
 import hashlib
 import requests
-from flask import Flask, request, abort
+from flask import Flask, request, abort, render_template
 
 import membership
 import store
@@ -13,6 +13,7 @@ import v2_flows
 import line_ui
 import experience
 import admin_experience
+import web_portal
 import sys
 import threading
 from contextlib import contextmanager
@@ -21,7 +22,7 @@ from legacy import baccarat
 from road_vision import parse_baccarat_road_image
 
 app = Flask(__name__)
-APP_VERSION = "INTEGRATED-V2.3-EXPERIENCE-TEST"
+APP_VERSION = "SUYING-V2.4-WEB-TEST"
 _USER_LOCKS = {}
 _LOCK_GUARD = threading.Lock()
 
@@ -52,6 +53,10 @@ def verify_signature(raw_body, signature):
 
 
 def reply_text(reply_token, text, quick_items=None):
+    captured = web_portal.CAPTURE.get()
+    if captured is not None:
+        captured.append((text, quick_items))
+        return
     if not reply_token or not CHANNEL_ACCESS_TOKEN:
         return
     messages = line_ui.build_messages(text, quick_items)
@@ -113,10 +118,11 @@ def handle_baccarat_image(event, user_id, reply_token):
 
 def main_menu_items():
     return [
-        ("百家 AI", "百家 AI"),
+        ("開啟甦贏", "開啟甦贏"),
+        ("百家實戰", "百家 AI"),
         ("繼續本桌", "繼續本桌"),
-        ("539 AI", "539 AI"),
-        ("Bingo AI", "Bingo AI"),
+        ("539 好懂看盤", "539 AI"),
+        ("賓果看盤", "Bingo AI"),
         ("我的紀錄", "我的紀錄"),
         ("使用教學", "使用教學"),
         ("會員中心", "會員中心"),
@@ -144,11 +150,11 @@ def mode_menu(mode):
 
 def welcome_text(user_id):
     return (
-        "🎲 AI 理性陪跑 V2\n\n"
+        "🎲 甦贏\n\n"
         "一個會員，同時使用：\n"
-        "① 百家 AI｜路單截圖匯入＋即時多訊號分析\n"
-        "② 539 AI｜每日模型＋母盤＋開獎後驗證\n"
-        "③ Bingo AI｜真實資料即時分析\n\n"
+        "① 百家實戰｜路單截圖匯入＋即時多訊號分析\n"
+        "② 539 好懂看盤｜每日模型＋母盤＋開獎後驗證\n"
+        "③ 賓果看盤｜真實資料即時分析\n\n"
         f"目前：{membership.status_text(user_id)}\n\n"
         "選一個模式直接開始。"
         + experience.home_progress(user_id)
@@ -230,6 +236,11 @@ lotto539.reply_message=lambda token,text: reply_text(token,text,main_menu_items(
 
 def _handle_global_text(event, text, user_id, reply_token):
     normalized = text.replace("　", " ").strip()
+
+    if normalized in {"開啟甦贏", "甦贏", "手機主頁"}:
+        link=web_portal.issue_link(user_id)
+        reply_text(reply_token,"甦贏｜手機主頁\n\n點下方按鈕，開始看盤、接續本桌或查看活動。\n此連結10分鐘內有效，請勿轉傳。",[("進入甦贏",link),("主選單","主選單")])
+        return True
 
     if normalized in {"開始", "主選單", "回主選單", "首頁", "選單"}:
         baccarat.ensure_user(user_id)
@@ -334,7 +345,7 @@ def _handle_global_text(event, text, user_id, reply_token):
 
 @app.get("/")
 def home():
-    return f"OK - AI Rational Companion {APP_VERSION}"
+    return render_template("portal.html")
 
 
 @app.get("/health")
@@ -442,6 +453,7 @@ def initialize():
     membership.init_db()
 
 initialize()
+web_portal.install(sys.modules[__name__])
 import scheduled_verification
 VERIFICATION_SCHEDULER = scheduled_verification.start()
 
