@@ -5,7 +5,7 @@ Backend deployed; owner-authorized research OA connected and LINE official verif
 Date: 2026-10-08 Asia/Taipei.
 Repository: beef0400-wq/urban-invention.
 Branch: v2-rational-companion-test-20261007.
-Runtime commit: e50371d943d49a64a1c86fd8eeadc00f75e19eab.
+Runtime commit: 71f31783204ca08ddb004f5aaf368cf98bdd4292.
 Service: srv-dami3j740ujc73b1acfg.
 Test DB: dpg-damhkgou01pc73aadrr0-a.
 URL: https://ai-rational-companion-v1-test.onrender.com
@@ -67,3 +67,5 @@ See ROLLBACK.md and deployment/test_db_baseline.json.
 - Core models, permissions, DB schema and LINE webhook unchanged. 回主選單 alias added.
 - 40 local tests PASS, including actions, number preservation, long-report pagination and payload byte limits. Deployment startup validates 8 representative message types with official LINE validate/reply; no messages sent.
 - Await real phone screenshots for font/width visual acceptance after deployment.
+
+- V2.2 deployment dep-db3q4cqj9qps738l9ut0 LIVE at 2026-10-08 14:03:03Z. Official LINE validated all 8 cases (V2_FLEX_PREFLIGHT PASS); /health 200 reports INTEGRATED-V2.2-FLEX-TEST with verification_scheduler=true. No real messages sent by verification.
