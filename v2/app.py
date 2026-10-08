@@ -10,6 +10,7 @@ import membership
 import store
 import verification
 import v2_flows
+import line_ui
 import sys
 import threading
 from contextlib import contextmanager
@@ -18,7 +19,7 @@ from legacy import baccarat
 from road_vision import parse_baccarat_road_image
 
 app = Flask(__name__)
-APP_VERSION = "INTEGRATED-V2.1-TEST"
+APP_VERSION = "INTEGRATED-V2.2-FLEX-TEST"
 _USER_LOCKS = {}
 _LOCK_GUARD = threading.Lock()
 
@@ -51,16 +52,7 @@ def verify_signature(raw_body, signature):
 def reply_text(reply_token, text, quick_items=None):
     if not reply_token or not CHANNEL_ACCESS_TOKEN:
         return
-    chunks = [str(text)[i:i+4800] for i in range(0,len(str(text)),4800)] or ["目前沒有資料"]
-    messages = [{"type":"text","text":chunk} for chunk in chunks[:5]]
-    message = messages[-1]
-    if quick_items:
-        message["quickReply"] = {
-            "items": [
-                {"type": "action", "action": {"type": "message", "label": label[:20], "text": value}}
-                for label, value in quick_items[:13]
-            ]
-        }
+    messages = line_ui.build_messages(text, quick_items)
     response = requests.post(
         LINE_REPLY_API,
         headers={"Authorization": f"Bearer {CHANNEL_ACCESS_TOKEN}", "Content-Type": "application/json"},
@@ -228,7 +220,7 @@ lotto539.reply_message=lambda token,text: reply_text(token,text,main_menu_items(
 def _handle_global_text(event, text, user_id, reply_token):
     normalized = text.replace("　", " ").strip()
 
-    if normalized in {"開始", "主選單", "首頁", "選單"}:
+    if normalized in {"開始", "主選單", "回主選單", "首頁", "選單"}:
         baccarat.ensure_user(user_id)
         baccarat.update_user(user_id, pending_flow=None, pending_main_result=None)
         reply_text(reply_token, welcome_text(user_id), main_menu_items())
@@ -286,7 +278,7 @@ def _handle_global_text(event, text, user_id, reply_token):
     if normalized == "使用教學":
         mode = membership.get_mode(user_id)
         if mode == "baccarat":
-            reply_text(reply_token, "百家 AI：\n1. 進桌後截完整路單\n2. 直接把截圖傳給 LINE\n3. 確認辨識預覽\n4. 之後每局只按一次莊／閒／和\n5. 想看模型細節再按詳細分析", mode_menu(mode))
+            reply_text(reply_token, "百家 AI：\n1. 進桌後截完整路單\n2. 直接把截圖傳給 LINE\n3. 確認辨識預覽\n4. 之後每局只按一次紅／藍／和\n5. 想看模型細節再按詳細分析", mode_menu(mode))
         elif mode == "bingo":
             reply_text(reply_token, "Bingo AI：選即時盤查看近20／50／100期真實資料統計。抓不到真實資料時系統不會造資料。", mode_menu(mode))
         else:

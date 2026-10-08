@@ -75,3 +75,5 @@ def main():
 
 if __name__ == '__main__':
     main()
+    from ui_preflight import main as validate_ui
+    validate_ui()

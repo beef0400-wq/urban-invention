@@ -60,3 +60,10 @@ See ROLLBACK.md and deployment/test_db_baseline.json.
 - Found zero signal index still displaying direction; presentation now shows 觀望 when index=0. Public decision card uses 紅/藍 throughout and labels correlated rules 訊號彙整. Core scores/directions unchanged.
 - 37 local tests pass, including zero-index presentation regression and existing core equivalence.
 - Real image calibration and remaining modes/phone steps still pending.
+
+## Native LINE presentation V2.2 (2026-10-08)
+- All gateway replies use shared Flex: home, modes, live/detail analysis, membership, trial, records, instructions, confirmation/errors and verification. Text content and commands preserved; public display translates red/blue names.
+- Navy header, white sections, color-coded modes, number chips, complete content paginated into swipeable panels; native footer exposes all actions, result buttons stay on one row. No maxLines clipping. Oversized replies retain previous text fallback.
+- Core models, permissions, DB schema and LINE webhook unchanged. 回主選單 alias added.
+- 40 local tests PASS, including actions, number preservation, long-report pagination and payload byte limits. Deployment startup validates 8 representative message types with official LINE validate/reply; no messages sent.
+- Await real phone screenshots for font/width visual acceptance after deployment.
