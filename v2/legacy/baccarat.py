@@ -1413,6 +1413,8 @@ def decision_card(user, analysis):
 
     support = "、".join(name for name,vote,_ in evidence if vote==direction) or "無明顯支持"
     opposing = "、".join(name for name,vote,_ in evidence if vote not in (direction,"中性")) or "無明顯反向"
+    plain_observation = "目前訊號不足，先保留判斷。" if headline == "觀望" else f"目前規則偏向{direction}，仍有反向訊號需核對。"
+    plain_reason = f"支持依據：{support}。反向依據：{opposing}。"
     road = main_only(user.get("current_road", []))
     preview = road_to_text(road[-24:], 24) if road else "—"
     m = analysis.get("metrics", {})
@@ -1422,6 +1424,9 @@ def decision_card(user, analysis):
         f"📶 訊號指數：{idx}/100（{signal}）\n"
         f"⚠️ 風險：{risk}\n"
         f"📈 路況：{analysis.get('road_name','—')}\n\n"
+        f"目前觀察：{plain_observation}\n"
+        f"主要依據：{plain_reason}\n"
+        "訊號限制：這些是歷史牌路的相關規則，不能保證下一局。\n\n"
         "━━━━━━━━━━━━━━━\n"
         "🗳️ 訊號彙整｜五項訊號\n"
         f"🔴 莊 {consensus.get('莊',0)}｜🔵 閒 {consensus.get('閒',0)}｜⚪ 中性 {consensus.get('中性',0)}\n\n"

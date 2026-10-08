@@ -56,3 +56,18 @@ def report(limit=7):
             from math import comb
             lines.append(f'{"母盤" if not n else str(n)+"星"}命中 {hits} 顆'+('' if not n else f'｜中獎組合 {comb(hits,n) if hits>=n else 0}'))
     return '\n'.join(lines) if rows else '\n'.join(lines+['尚無開獎前鎖定資料，不回填歷史預測。'])
+
+
+def today_report():
+    target=engine.now_tw().date().isoformat()
+    with store.cursor() as c:
+        c.execute('SELECT locked_at,digest,payload,actual,verified_at FROM v2_public_539 WHERE target_date=%s',(target,));row=c.fetchone()
+    if not row:return f'539 AI｜今日追蹤\n\n日期：{target}\n今天沒有事前鎖定分析，不補做事後預測。'
+    at,digest,p,a,verified=row;m=json.loads(json.loads(p)['note'])
+    lines=['539 AI｜今日追蹤',f'日期：{target}',f'事前鎖定：{at}',f'驗證碼：{digest[:12]}', '\n母盤\n'+m['motherboard']]
+    if not a:lines.append('\n狀態：已鎖定，待開獎／資料更新')
+    else:
+        actual=set(json.loads(a));hits=sorted(set(engine.parse_nums_text(m['motherboard']))&actual)
+        lines += ['\n實際開獎\n'+engine.fmt_nums(actual),f'\n母盤命中：{len(hits)}顆\n命中號碼：{engine.fmt_nums(hits) or "無"}',f'對帳時間：{verified}']
+    lines.append('\n這是原始鎖定分析的追蹤紀錄，開獎後不改號。')
+    return '\n'.join(lines)

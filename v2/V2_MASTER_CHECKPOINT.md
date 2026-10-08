@@ -69,3 +69,14 @@ See ROLLBACK.md and deployment/test_db_baseline.json.
 - Await real phone screenshots for font/width visual acceptance after deployment.
 
 - V2.2 deployment dep-db3q4cqj9qps738l9ut0 LIVE at 2026-10-08 14:03:03Z. Official LINE validated all 8 cases (V2_FLEX_PREFLIGHT PASS); /health 200 reports INTEGRATED-V2.2-FLEX-TEST with verification_scheduler=true. No real messages sent by verification.
+
+## Experience V2.3 (2026-10-08 owner approved continuation)
+- Home reports membership/expiry, live baccarat road and pending preview, today's actual 539 lock/reconciliation status and last Bingo read status (explicitly not live background refresh).
+- Resume table across modes. One-step undo restores full previous analysis state, including counters, and consumes the snapshot once. Ending/new table clears undo.
+- Live append/correct/delete stages a preview; confirm required, original road preserved until confirmation. New image/text offers update current table vs new table. Full-prefix or unique overlap >=12 only; ambiguous alignment never auto-merges. Preview checks base road before apply.
+- Human explanation added to baccarat and 539; Bingo describes its rise/fall window and historical-statistic limits. Algorithms unchanged.
+- 539 today tracking shows original locked hash/date, exact-date actual, hits and reconciliation time.
+- Bingo 20/50/100 now filters actual window; default overview shows all three. Existing source/freshness checks preserved.
+- Admin member-button flow: recent inactive bound accounts, 3/7/30 days, explicit final confirmation; admin auth checked each step and account identity rechecked. Existing /vip remains supported.
+- 47 local tests pass including undo state restoration, cancel, stale preview, ambiguous alignment, cross-mode resume, Bingo windows and admin confirmation/access revocation.
+- LINE startup validates 12 representative UI cases without sending messages. Mobile visual acceptance remains needed.

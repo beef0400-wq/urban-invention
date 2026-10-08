@@ -274,3 +274,59 @@ def test_zero_signal_card_observes_and_uses_public_labels():
     assert '莊' not in card and '閒' not in card
     assert '紅7 / 藍10' in card and '訊號彙整' in card
     assert analysis['direction']=='莊'
+
+def test_live_undo_restores_entire_round_and_only_once(isolate):
+    import experience
+    paid();send('百家 AI');send(road());send('確認開始')
+    old=experience.snapshot(ba.get_user('U1'))
+    send('藍');assert len(ba.get_user('U1')['current_road'])==len(old['current_road'])+1
+    send('撤回上一筆');assert experience.snapshot(ba.get_user('U1'))==old
+    send('撤回上一筆');assert experience.snapshot(ba.get_user('U1'))==old
+    assert '沒有可撤回' in isolate[-1][0]
+
+def test_live_correction_is_previewed_and_can_cancel(isolate):
+    paid();send('百家 AI');send(road());send('確認開始');old=list(ba.get_user('U1')['current_road'])
+    send('追加 紅藍和');assert ba.get_user('U1')['current_road']==old
+    send('確認修正');assert ba.get_user('U1')['current_road']==old+['莊','閒','和']
+    send('撤回上一筆');assert ba.get_user('U1')['current_road']==old
+    send('修正 1 藍');send('取消更新');assert ba.get_user('U1')['current_road']==old
+
+def test_table_choice_preserves_existing_road_and_stale_preview(isolate):
+    paid();send('百家 AI');send(road());send('確認開始');old=list(ba.get_user('U1')['current_road'])
+    send(road()+'紅藍');assert ba.get_user('U1')['current_road']==old
+    assert store.get_state('U1')['pending']['added']==2
+    send('確認開始');assert ba.get_user('U1')['current_road']==old
+    send('紅');send('更新本桌');assert ba.get_user('U1')['current_road']==old+['莊']
+    assert '過期' in isolate[-1][0]
+
+def test_unique_overlap_and_ambiguous_alignment():
+    import experience
+    old=['莊']*13+['閒']+['莊','閒','和','莊','莊','閒','和','閒','莊','和','閒','莊']
+    assert experience.align_road(old,old[-12:]+['閒'])[0]==old+['閒']
+    assert experience.align_road(['莊']*30,['莊']*15+['閒'])==(None,None)
+
+def test_resume_from_other_mode_and_home_progress(isolate):
+    paid();send('百家 AI');send(road());send('確認開始');send('539 AI');send('繼續本桌')
+    assert membership.get_mode('U1')=='baccarat' and '綜合判讀' in isolate[-1][0]
+    send('主選單');assert '進行中' in isolate[-1][0] and '目前進度' in isolate[-1][0]
+
+def test_bingo_window_filter_preserves_freshness(monkeypatch):
+    from datetime import datetime
+    stamp=lo.now_tw()
+    draws=[{'date':stamp.date(),'time':stamp.strftime('%H:%M'),'period':str(i),'numbers':list(range(1,21))} for i in range(120)]
+    monkeypatch.setattr(lo,'ensure_latest_bingo_in_db',lambda:True)
+    monkeypatch.setattr(lo,'load_bingo_draws',lambda n:draws)
+    msg=flow.bingo_board(50)
+    assert '近50期' in msg and '近20期' not in msg and '近100期' not in msg
+    assert all('近'+str(n)+'期' in flow.bingo_board() for n in (20,50,100))
+
+def test_admin_button_confirmation_checks_permission_every_step(isolate,monkeypatch):
+    monkeypatch.setattr(g,'ADMIN_USER_IDS',{'U1'})
+    paid();ba.ensure_user('U2');ba.update_user('U2',bound_account='member002')
+    send('管理開通 member002');send('管理天數 7')
+    assert not membership.has_access('U2')
+    monkeypatch.setattr(g,'ADMIN_USER_IDS',set());send('確認開通會員')
+    assert not membership.has_access('U2')
+    monkeypatch.setattr(g,'ADMIN_USER_IDS',{'U1'});send('確認開通會員')
+    expiry=membership.get_expiry('U2');assert membership.is_paid('U2')
+    send('確認開通會員');assert membership.get_expiry('U2')==expiry

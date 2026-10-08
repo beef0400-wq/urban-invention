@@ -77,3 +77,5 @@ if __name__ == '__main__':
     main()
     from ui_preflight import main as validate_ui
     validate_ui()
+    from experience_smoke import main as check_experience
+    check_experience()

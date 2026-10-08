@@ -11,6 +11,8 @@ import store
 import verification
 import v2_flows
 import line_ui
+import experience
+import admin_experience
 import sys
 import threading
 from contextlib import contextmanager
@@ -19,7 +21,7 @@ from legacy import baccarat
 from road_vision import parse_baccarat_road_image
 
 app = Flask(__name__)
-APP_VERSION = "INTEGRATED-V2.2-FLEX-TEST"
+APP_VERSION = "INTEGRATED-V2.3-EXPERIENCE-TEST"
 _USER_LOCKS = {}
 _LOCK_GUARD = threading.Lock()
 
@@ -75,7 +77,7 @@ def fetch_line_image(message_id):
     return r.content
 
 def baccarat_live_buttons():
-    return [("🔴紅", "莊"), ("🔵藍", "閒"), ("🟢和", "和"), ("詳細分析", "詳細分析"), ("結束本桌", "結束分析")]
+    return [("🔴紅", "莊"), ("🔵藍", "閒"), ("🟢和", "和"), ("詳細分析", "詳細分析"), ("撤回上一筆", "撤回上一筆"), ("補漏／修正", "修正本桌"), ("主選單", "主選單"), ("結束本桌", "結束分析")]
 
 def _road_preview(seq, limit=36):
     mapping = {"莊": "🔴", "閒": "🔵", "和": "🟢"}
@@ -105,12 +107,14 @@ def handle_baccarat_image(event, user_id, reply_token):
             [("手動匯入", "匯入牌路"), ("主選單", "主選單")],
         )
         return
-    reply_text(reply_token, v2_flows.pending(user_id, parsed.sequence, 'image', parsed.confidence), v2_flows.CONFIRM_BUTTONS)
+    choice=experience.stage_choices(user_id,parsed.sequence,'image',parsed.confidence)
+    reply_text(reply_token, choice or v2_flows.pending(user_id, parsed.sequence, 'image', parsed.confidence), experience.choice_buttons(user_id) if choice else v2_flows.CONFIRM_BUTTONS)
 
 
 def main_menu_items():
     return [
         ("百家 AI", "百家 AI"),
+        ("繼續本桌", "繼續本桌"),
         ("539 AI", "539 AI"),
         ("Bingo AI", "Bingo AI"),
         ("我的紀錄", "我的紀錄"),
@@ -132,7 +136,7 @@ def mode_menu(mode):
             ("539 AI", "539 AI"), ("百家 AI", "百家 AI"),
         ]
     return [
-        ("今日分析", "今日陪跑"), ("母盤追蹤", "母盤追蹤"),
+        ("今日分析", "今日陪跑"), ("今日追蹤", "今日追蹤"), ("母盤追蹤", "母盤追蹤"),
         ("Bingo AI", "Bingo AI"), ("百家 AI", "百家 AI"),
         ("會員中心", "會員中心"), ("主選單", "主選單"),
     ]
@@ -147,6 +151,7 @@ def welcome_text(user_id):
         "③ Bingo AI｜真實資料即時分析\n\n"
         f"目前：{membership.status_text(user_id)}\n\n"
         "選一個模式直接開始。"
+        + experience.home_progress(user_id)
     )
 
 
@@ -190,6 +195,8 @@ def _forward_to_legacy(engine, event, replacement_text=None):
         reply_text(cloned.get('replyToken'),'請先開啟免費體驗或會員。',[('免費體驗','免費體驗'),('主選單','主選單')]);return
     payload=json.dumps({'events':[cloned]},ensure_ascii=False).encode()
     if engine=='baccarat':
+        before=baccarat.get_user(uid)
+        before_snapshot=experience.snapshot(before) if before else None
         # Restore persisted road for local-only development mode.
         state=store.get_state(uid)
         if not baccarat.use_db() and uid not in baccarat.MEMORY_USERS and state.get('road'):
@@ -198,7 +205,11 @@ def _forward_to_legacy(engine, event, replacement_text=None):
             resp=client.post('/callback',data=payload,content_type='application/json',headers={'X-Line-Signature':'internal'})
         user=baccarat.get_user(uid)
         if user:
-            state=store.get_state(uid);state['road']=user.get('current_road',[]);store.put_state(uid,state)
+            state=store.get_state(uid)
+            if text=='結束分析':state.pop('undo',None);state.pop('pending',None)
+            elif before_snapshot and before_snapshot['current_road']!=user.get('current_road'):
+                state['undo']=before_snapshot
+            state['road']=user.get('current_road',[]);store.put_state(uid,state)
             store.record(uid,"baccarat",{"kind":text,"sequence":user.get("current_road",[]),"analysis":baccarat.analyze_v15(user)})
     else:
         with lotto539.app.test_client() as client:
@@ -262,7 +273,7 @@ def _handle_global_text(event, text, user_id, reply_token):
     if normalized in {"會員中心", "查詢資格", "我的到期日"}:
         reply_text(reply_token, "👤 會員中心\n\n" + membership.status_text(user_id), [
             ("免費體驗", "免費體驗"), ("539 AI", "539 AI"), ("百家 AI", "百家 AI"), ("主選單", "主選單")
-        ])
+        ] + ([("管理會員", "管理會員")] if user_id in ADMIN_USER_IDS else []))
         return True
 
     if normalized in {"免費體驗", "免費試用", "試用一天", "免費使用1天", "免費使用一天"}:
@@ -388,6 +399,8 @@ def process_event(event):
         return
 
     text = (message.get("text") or "").strip()
+    if admin_experience.handle(sys.modules[__name__],text,user_id,reply_token):
+        return
     if v2_flows.handle(sys.modules[__name__], event, text, user_id, reply_token):
         return
     if _handle_global_text(event, text, user_id, reply_token):

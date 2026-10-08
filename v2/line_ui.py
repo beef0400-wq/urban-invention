@@ -102,7 +102,7 @@ def build_messages(text,quick_items=None):
     groups=sections(raw)
     if groups and groups[0] and groups[0][0]==first and len(groups[0])==1:groups=groups[1:] or [['選一個功能開始。']]
     # A visible native menu replaces the horizontally hidden quick-reply-only menu.
-    if raw.startswith('🎲 AI 理性陪跑'):
+    if raw.startswith('🎲 AI 理性陪跑') and '目前進度' not in raw:
         title='今天想看哪個模式？';key='home'
         groups=[['百家 AI','傳路單 → 核對 → 即時分析'],['539 AI','每日母盤、核心號碼與開獎驗證'],['Bingo AI','近20／50／100期的真實資料統計'],
                 [line for line in raw.splitlines() if line.startswith('目前：')]]

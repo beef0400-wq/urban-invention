@@ -15,6 +15,13 @@ CASES=[
  ('📊 詳細分析 V15\n\n'+ '\n\n'.join('測試段落\n'+('長內容'*100) for _ in range(10)),[('主選單','主選單')]),
 ]
 
+CASES.extend([
+ ('百家 AI｜核對本桌更新\n\n可對齊目前牌路，預計新增2局。\n\n新匯入牌路\n1:紅 2:藍',[('更新本桌','更新本桌'),('換新桌','換新桌'),('取消更新','取消更新')]),
+ ('百家 AI｜補漏與修正\n\n核對後按確認修正。',[('確認修正','確認修正'),('取消更新','取消更新')]),
+ ('539 AI｜今日追蹤\n\n事前鎖定：測試\n\n實際開獎\n01 02 03 04 05',[('近7期','驗證7'),('主選單','主選單')]),
+ ('會員中心｜開通確認\n\n帳號：測試帳號\n天數：7天',[('確認開通','確認開通會員'),('取消','取消會員操作')]),
+])
+
 def main():
     token=os.getenv('CHANNEL_ACCESS_TOKEN') or os.getenv('LINE_CHANNEL_ACCESS_TOKEN')
     if not token:raise RuntimeError('Flex validation requires configured LINE channel')
@@ -27,6 +34,6 @@ def main():
             details=response.json().get('details',[])
             raise RuntimeError('LINE Flex validation HTTP '+str(response.status_code)+' '+str(details))
     with ThreadPoolExecutor(max_workers=4) as pool:list(pool.map(validate,CASES))
-    print('V2_FLEX_PREFLIGHT PASS: 8 message types validated by LINE; no messages sent',flush=True)
+    print(f'V2_FLEX_PREFLIGHT PASS: {len(CASES)} message types validated by LINE; no messages sent',flush=True)
 
 if __name__=='__main__':main()
