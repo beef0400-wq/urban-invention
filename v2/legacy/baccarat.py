@@ -349,8 +349,8 @@ def ensure_user(line_user_id):
                 RETURNING *;
                 """, (
                     line_user_id,
-                    u["trial_started_at"].replace(tzinfo=None),
-                    u["trial_end_at"].replace(tzinfo=None),
+                    u["trial_started_at"].replace(tzinfo=None) if u["trial_started_at"] else None,
+                    u["trial_end_at"].replace(tzinfo=None) if u["trial_end_at"] else None,
                     json.dumps([]),
                     u["created_at"].replace(tzinfo=None),
                     u["updated_at"].replace(tzinfo=None),

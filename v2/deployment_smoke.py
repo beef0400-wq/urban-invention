@@ -24,6 +24,21 @@ print('V2_REAL_DATA', json.dumps({'539_rows': history_count, 'bingo_rows': len(l
 if not gateway.CHANNEL_SECRET:
     raise RuntimeError('Test LINE channel secret is missing')
 
+# Validate the configured test token without sending a message or changing LINE settings.
+if gateway.CHANNEL_ACCESS_TOKEN:
+    try:
+        response = gateway.requests.get('https://api.line.me/v2/bot/info', headers={'Authorization':'Bearer '+gateway.CHANNEL_ACCESS_TOKEN}, timeout=10)
+        print('V2_LINE_TOKEN_CHECK', response.status_code, flush=True)
+        if response.status_code == 200:
+            info = response.json()
+            print('V2_TEST_OA', json.dumps({'name':info.get('displayName'), 'basic_id':info.get('basicId')}, ensure_ascii=False), flush=True)
+            hook = gateway.requests.get('https://api.line.me/v2/bot/channel/webhook/endpoint', headers={'Authorization':'Bearer '+gateway.CHANNEL_ACCESS_TOKEN}, timeout=10)
+            if hook.status_code == 200:
+                endpoint = hook.json()
+                print('V2_TEST_WEBHOOK', json.dumps({'matches_test':endpoint.get('endpoint')=='https://ai-rational-companion-v1-test.onrender.com/webhook','active':endpoint.get('active')}), flush=True)
+    except Exception:
+        print('V2_LINE_TOKEN_CHECK unavailable', flush=True)
+
 with gateway.app.test_client() as client:
     assert client.post('/webhook', json={'events': []}).status_code == 403
     def send(text, event_id=None):
@@ -57,10 +72,3 @@ with gateway.app.test_client() as client:
     assert len(store.history(uid)) >= 3
     send('主選單')
 print('V2_POSTGRES_ROUTER_SMOKE PASS: signed webhook, unsigned rejection, shared membership, batch confirmation, correction, one-click round, duplicate event, 539/Bingo routing, shared history', flush=True)
-# Validate the configured test token without sending a message or changing LINE settings.
-if gateway.CHANNEL_ACCESS_TOKEN:
-    try:
-        response = gateway.requests.get('https://api.line.me/v2/bot/info', headers={'Authorization':'Bearer '+gateway.CHANNEL_ACCESS_TOKEN}, timeout=10)
-        print('V2_LINE_TOKEN_CHECK', response.status_code, flush=True)
-    except Exception:
-        print('V2_LINE_TOKEN_CHECK unavailable', flush=True)
