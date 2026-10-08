@@ -1,0 +1,477 @@
+{
+  "capturedAt": "2026-10-07T16:20:00Z",
+  "databaseId": "dpg-damhkgou01pc73aadrr0-a",
+  "method": "Read-only schema and empty-table snapshot; NOT pg_dump",
+  "counts": {
+    "users": 0,
+    "analysis_logs": 0
+  },
+  "analysis_logs": null,
+  "columns": [
+    {
+      "column_default": "nextval('analysis_logs_id_seq'::regclass)",
+      "column_name": "id",
+      "data_type": "integer",
+      "is_nullable": "NO",
+      "ordinal_position": 1,
+      "table_name": "analysis_logs",
+      "udt_name": "int4"
+    },
+    {
+      "column_default": null,
+      "column_name": "line_user_id",
+      "data_type": "text",
+      "is_nullable": "NO",
+      "ordinal_position": 2,
+      "table_name": "analysis_logs",
+      "udt_name": "text"
+    },
+    {
+      "column_default": null,
+      "column_name": "predicted",
+      "data_type": "text",
+      "is_nullable": "YES",
+      "ordinal_position": 3,
+      "table_name": "analysis_logs",
+      "udt_name": "text"
+    },
+    {
+      "column_default": null,
+      "column_name": "actual",
+      "data_type": "text",
+      "is_nullable": "YES",
+      "ordinal_position": 4,
+      "table_name": "analysis_logs",
+      "udt_name": "text"
+    },
+    {
+      "column_default": null,
+      "column_name": "hit",
+      "data_type": "boolean",
+      "is_nullable": "YES",
+      "ordinal_position": 5,
+      "table_name": "analysis_logs",
+      "udt_name": "bool"
+    },
+    {
+      "column_default": "now()",
+      "column_name": "created_at",
+      "data_type": "timestamp without time zone",
+      "is_nullable": "NO",
+      "ordinal_position": 6,
+      "table_name": "analysis_logs",
+      "udt_name": "timestamp"
+    },
+    {
+      "column_default": null,
+      "column_name": "line_user_id",
+      "data_type": "text",
+      "is_nullable": "NO",
+      "ordinal_position": 1,
+      "table_name": "users",
+      "udt_name": "text"
+    },
+    {
+      "column_default": null,
+      "column_name": "bound_account",
+      "data_type": "text",
+      "is_nullable": "YES",
+      "ordinal_position": 2,
+      "table_name": "users",
+      "udt_name": "text"
+    },
+    {
+      "column_default": null,
+      "column_name": "vip_expire_at",
+      "data_type": "timestamp without time zone",
+      "is_nullable": "YES",
+      "ordinal_position": 3,
+      "table_name": "users",
+      "udt_name": "timestamp"
+    },
+    {
+      "column_default": null,
+      "column_name": "trial_started_at",
+      "data_type": "timestamp without time zone",
+      "is_nullable": "YES",
+      "ordinal_position": 4,
+      "table_name": "users",
+      "udt_name": "timestamp"
+    },
+    {
+      "column_default": null,
+      "column_name": "trial_end_at",
+      "data_type": "timestamp without time zone",
+      "is_nullable": "YES",
+      "ordinal_position": 5,
+      "table_name": "users",
+      "udt_name": "timestamp"
+    },
+    {
+      "column_default": "false",
+      "column_name": "trial_expired_notice_sent",
+      "data_type": "boolean",
+      "is_nullable": "NO",
+      "ordinal_position": 6,
+      "table_name": "users",
+      "udt_name": "bool"
+    },
+    {
+      "column_default": "'[]'::jsonb",
+      "column_name": "current_road",
+      "data_type": "jsonb",
+      "is_nullable": "NO",
+      "ordinal_position": 7,
+      "table_name": "users",
+      "udt_name": "jsonb"
+    },
+    {
+      "column_default": "0",
+      "column_name": "high_count",
+      "data_type": "integer",
+      "is_nullable": "NO",
+      "ordinal_position": 8,
+      "table_name": "users",
+      "udt_name": "int4"
+    },
+    {
+      "column_default": "0",
+      "column_name": "low_count",
+      "data_type": "integer",
+      "is_nullable": "NO",
+      "ordinal_position": 9,
+      "table_name": "users",
+      "udt_name": "int4"
+    },
+    {
+      "column_default": "0",
+      "column_name": "tie_count",
+      "data_type": "integer",
+      "is_nullable": "NO",
+      "ordinal_position": 10,
+      "table_name": "users",
+      "udt_name": "int4"
+    },
+    {
+      "column_default": "0",
+      "column_name": "banker_pair_count",
+      "data_type": "integer",
+      "is_nullable": "NO",
+      "ordinal_position": 11,
+      "table_name": "users",
+      "udt_name": "int4"
+    },
+    {
+      "column_default": "0",
+      "column_name": "player_pair_count",
+      "data_type": "integer",
+      "is_nullable": "NO",
+      "ordinal_position": 12,
+      "table_name": "users",
+      "udt_name": "int4"
+    },
+    {
+      "column_default": null,
+      "column_name": "pending_flow",
+      "data_type": "text",
+      "is_nullable": "YES",
+      "ordinal_position": 13,
+      "table_name": "users",
+      "udt_name": "text"
+    },
+    {
+      "column_default": null,
+      "column_name": "pending_main_result",
+      "data_type": "text",
+      "is_nullable": "YES",
+      "ordinal_position": 14,
+      "table_name": "users",
+      "udt_name": "text"
+    },
+    {
+      "column_default": "false",
+      "column_name": "imported_ready",
+      "data_type": "boolean",
+      "is_nullable": "NO",
+      "ordinal_position": 15,
+      "table_name": "users",
+      "udt_name": "bool"
+    },
+    {
+      "column_default": "false",
+      "column_name": "analysis_active",
+      "data_type": "boolean",
+      "is_nullable": "NO",
+      "ordinal_position": 16,
+      "table_name": "users",
+      "udt_name": "bool"
+    },
+    {
+      "column_default": null,
+      "column_name": "point_range",
+      "data_type": "text",
+      "is_nullable": "YES",
+      "ordinal_position": 17,
+      "table_name": "users",
+      "udt_name": "text"
+    },
+    {
+      "column_default": null,
+      "column_name": "play_mode",
+      "data_type": "text",
+      "is_nullable": "YES",
+      "ordinal_position": 18,
+      "table_name": "users",
+      "udt_name": "text"
+    },
+    {
+      "column_default": null,
+      "column_name": "target_profit",
+      "data_type": "text",
+      "is_nullable": "YES",
+      "ordinal_position": 19,
+      "table_name": "users",
+      "udt_name": "text"
+    },
+    {
+      "column_default": null,
+      "column_name": "last_prediction",
+      "data_type": "text",
+      "is_nullable": "YES",
+      "ordinal_position": 20,
+      "table_name": "users",
+      "udt_name": "text"
+    },
+    {
+      "column_default": "'-99'::integer",
+      "column_name": "last_treasure_round",
+      "data_type": "integer",
+      "is_nullable": "NO",
+      "ordinal_position": 21,
+      "table_name": "users",
+      "udt_name": "int4"
+    },
+    {
+      "column_default": "0",
+      "column_name": "round_win",
+      "data_type": "integer",
+      "is_nullable": "NO",
+      "ordinal_position": 22,
+      "table_name": "users",
+      "udt_name": "int4"
+    },
+    {
+      "column_default": "0",
+      "column_name": "round_loss",
+      "data_type": "integer",
+      "is_nullable": "NO",
+      "ordinal_position": 23,
+      "table_name": "users",
+      "udt_name": "int4"
+    },
+    {
+      "column_default": "0",
+      "column_name": "win_streak",
+      "data_type": "integer",
+      "is_nullable": "NO",
+      "ordinal_position": 24,
+      "table_name": "users",
+      "udt_name": "int4"
+    },
+    {
+      "column_default": "0",
+      "column_name": "loss_streak",
+      "data_type": "integer",
+      "is_nullable": "NO",
+      "ordinal_position": 25,
+      "table_name": "users",
+      "udt_name": "int4"
+    },
+    {
+      "column_default": "0",
+      "column_name": "max_win_streak",
+      "data_type": "integer",
+      "is_nullable": "NO",
+      "ordinal_position": 26,
+      "table_name": "users",
+      "udt_name": "int4"
+    },
+    {
+      "column_default": "0",
+      "column_name": "max_loss_streak",
+      "data_type": "integer",
+      "is_nullable": "NO",
+      "ordinal_position": 27,
+      "table_name": "users",
+      "udt_name": "int4"
+    },
+    {
+      "column_default": "now()",
+      "column_name": "created_at",
+      "data_type": "timestamp without time zone",
+      "is_nullable": "NO",
+      "ordinal_position": 28,
+      "table_name": "users",
+      "udt_name": "timestamp"
+    },
+    {
+      "column_default": "now()",
+      "column_name": "updated_at",
+      "data_type": "timestamp without time zone",
+      "is_nullable": "NO",
+      "ordinal_position": 29,
+      "table_name": "users",
+      "udt_name": "timestamp"
+    }
+  ],
+  "constraints": [
+    {
+      "conname": "users_line_user_id_not_null",
+      "definition": "NOT NULL line_user_id",
+      "table_name": "users"
+    },
+    {
+      "conname": "users_trial_expired_notice_sent_not_null",
+      "definition": "NOT NULL trial_expired_notice_sent",
+      "table_name": "users"
+    },
+    {
+      "conname": "users_current_road_not_null",
+      "definition": "NOT NULL current_road",
+      "table_name": "users"
+    },
+    {
+      "conname": "users_high_count_not_null",
+      "definition": "NOT NULL high_count",
+      "table_name": "users"
+    },
+    {
+      "conname": "users_low_count_not_null",
+      "definition": "NOT NULL low_count",
+      "table_name": "users"
+    },
+    {
+      "conname": "users_tie_count_not_null",
+      "definition": "NOT NULL tie_count",
+      "table_name": "users"
+    },
+    {
+      "conname": "users_banker_pair_count_not_null",
+      "definition": "NOT NULL banker_pair_count",
+      "table_name": "users"
+    },
+    {
+      "conname": "users_player_pair_count_not_null",
+      "definition": "NOT NULL player_pair_count",
+      "table_name": "users"
+    },
+    {
+      "conname": "users_imported_ready_not_null",
+      "definition": "NOT NULL imported_ready",
+      "table_name": "users"
+    },
+    {
+      "conname": "users_analysis_active_not_null",
+      "definition": "NOT NULL analysis_active",
+      "table_name": "users"
+    },
+    {
+      "conname": "users_last_treasure_round_not_null",
+      "definition": "NOT NULL last_treasure_round",
+      "table_name": "users"
+    },
+    {
+      "conname": "users_round_win_not_null",
+      "definition": "NOT NULL round_win",
+      "table_name": "users"
+    },
+    {
+      "conname": "users_round_loss_not_null",
+      "definition": "NOT NULL round_loss",
+      "table_name": "users"
+    },
+    {
+      "conname": "users_win_streak_not_null",
+      "definition": "NOT NULL win_streak",
+      "table_name": "users"
+    },
+    {
+      "conname": "users_loss_streak_not_null",
+      "definition": "NOT NULL loss_streak",
+      "table_name": "users"
+    },
+    {
+      "conname": "users_max_win_streak_not_null",
+      "definition": "NOT NULL max_win_streak",
+      "table_name": "users"
+    },
+    {
+      "conname": "users_max_loss_streak_not_null",
+      "definition": "NOT NULL max_loss_streak",
+      "table_name": "users"
+    },
+    {
+      "conname": "users_created_at_not_null",
+      "definition": "NOT NULL created_at",
+      "table_name": "users"
+    },
+    {
+      "conname": "users_updated_at_not_null",
+      "definition": "NOT NULL updated_at",
+      "table_name": "users"
+    },
+    {
+      "conname": "users_pkey",
+      "definition": "PRIMARY KEY (line_user_id)",
+      "table_name": "users"
+    },
+    {
+      "conname": "analysis_logs_id_not_null",
+      "definition": "NOT NULL id",
+      "table_name": "analysis_logs"
+    },
+    {
+      "conname": "analysis_logs_line_user_id_not_null",
+      "definition": "NOT NULL line_user_id",
+      "table_name": "analysis_logs"
+    },
+    {
+      "conname": "analysis_logs_created_at_not_null",
+      "definition": "NOT NULL created_at",
+      "table_name": "analysis_logs"
+    },
+    {
+      "conname": "analysis_logs_pkey",
+      "definition": "PRIMARY KEY (id)",
+      "table_name": "analysis_logs"
+    }
+  ],
+  "indexes": [
+    {
+      "indexdef": "CREATE UNIQUE INDEX users_pkey ON public.users USING btree (line_user_id)",
+      "indexname": "users_pkey",
+      "tablename": "users"
+    },
+    {
+      "indexdef": "CREATE UNIQUE INDEX analysis_logs_pkey ON public.analysis_logs USING btree (id)",
+      "indexname": "analysis_logs_pkey",
+      "tablename": "analysis_logs"
+    }
+  ],
+  "sequences": [
+    {
+      "cache_size": 1,
+      "cycle": false,
+      "data_type": "integer",
+      "increment_by": 1,
+      "last_value": null,
+      "max_value": 2147483647,
+      "min_value": 1,
+      "schemaname": "public",
+      "sequencename": "analysis_logs_id_seq",
+      "sequenceowner": "ai_rational_companion_v1_test_db_user",
+      "start_value": 1
+    }
+  ],
+  "users": null
+}

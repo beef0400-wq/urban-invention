@@ -19,6 +19,9 @@ V2.1 本機 Test Candidate；未部署，不是手機真人測試 READY。
 - 只讀確認既有 Render test / test DB users與analysis_logs schema；未寫入任何遠端DB。
 
 ## DOING
+- 2026-10-08 台灣時間：Render 瀏覽器已登入；test 自動部署已關閉，尚未改 source 或執行部署。
+- 已保存空 test DB schema baseline（users/analysis_logs 均 0 筆）；新增部署前固定 DB guard 與隔離 schema migration/rollback rehearsal。
+- 最新本機 32 tests passed；新增 6 項部署資料庫 guard 測試。
 - 2026-10-07：改接 urban-invention 的隔離測試分支 v2-rational-companion-test-20261007。
 - 已核對兩個正式倉庫 app.py 與原 ZIP 完全一致（除尾端空行）。
 - 測試分支基底 commit：6dafef5ca66f4b33843c23a9c5279bb8b7806e68。
@@ -26,7 +29,7 @@ V2.1 本機 Test Candidate；未部署，不是手機真人測試 READY。
 
 ## BLOCKED
 - 已解除原有倉庫權限問題；使用者指示忽略空 ai-rational-companion-v 倉庫。
-- Render 既有測試服務仍連接空倉庫；目前連接工具沒有修改 service repo/branch 的操作。若改用瀏覽器設定，需使用者同意此工具切換。
+- 使用者已同意 Render 瀏覽器操作；正在設定既有測試站 source/branch/build/start，保留正式環境。
 - 真實百家平台路單尚未提供；大路龍尾／和局覆蓋／多區歧義保守拒絕，不能宣稱完成跨平台辨識。
 
 ## NEXT

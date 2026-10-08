@@ -6,7 +6,7 @@
 來源：beef0400-wq/urban-invention，分支 v2-rational-companion-test-20261007。
 V2 放在 v2/，原有根目錄程式與正式 main 保持不變。
 Render Build: pip install -r v2/requirements.txt
-Render Start: cd v2 && gunicorn app:app --bind 0.0.0.0:$PORT --workers 1 --threads 4 --timeout 120
+Render Start: cd v2 && python deployment_preflight.py && gunicorn app:app --bind 0.0.0.0:$PORT --workers 1 --threads 4 --timeout 120
 既有測試服務需改接此倉庫／分支；部署前必須備份測試 DB，依 ROLLBACK.md 演練 migration。
 v2/.github/workflows/ 僅為排程與測試範本，不會被 GitHub 自動執行；正式啟用前需另行設定根目錄 workflow 與測試專用 secret，不能宣稱排程已運行。
 
