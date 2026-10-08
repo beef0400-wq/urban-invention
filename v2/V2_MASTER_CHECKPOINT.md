@@ -1,11 +1,11 @@
 # AI理性陪跑 V2｜MASTER CHECKPOINT
 
 ## CURRENT
-Backend deployed; owner-authorized research OA connected and LINE official verification PASS (HTTP 200). Phone acceptance pending.
-Date: 2026-10-08 Asia/Taipei.
+甦贏 mobile portal deployed on existing isolated service; owner-authorized research OA remains connected. Browser homepage/539 navigation checked. New portal phone acceptance and owner admin role confirmation pending.
+Date: 2026-10-09 Asia/Taipei.
 Repository: beef0400-wq/urban-invention.
 Branch: v2-rational-companion-test-20261007.
-Runtime commit: b19e6dcc1c2456c6bb6e3d1a5660aa76b887924f.
+Runtime commit: 43159aa35526225ad964be5f9f0ce07a0516f3e7.
 Service: srv-dami3j740ujc73b1acfg.
 Test DB: dpg-damhkgou01pc73aadrr0-a.
 URL: https://ai-rational-companion-v1-test.onrender.com
@@ -95,6 +95,10 @@ Owner approved new brand 甦贏 and LINE -> full mobile website, simple first la
 - 539 large actions, mother number chips, expandable full model/combination reasons, original reconciliation reports, private favorite numbers (<=10, not prediction inputs).
 - Bingo original source/freshness/window checks and full text retained in expandable sections.
 - Admin-only campaign manager: image uploads reencoded JPEG, date scheduling in Taipei, preview then publish, separate draft/live records, expiry/hide, builtin destinations. Homepage Bingo size toggle. Empty activity state until owner supplies images.
-- 55 local tests planned/checked including identity expiry, CSRF, shared trial/table/undo, dedup, cross-user isolation, drafts/private images, publish/expiry, favorite limits and admin revocation.
+- 55 local tests PASS including identity expiry, CSRF, shared trial/table/undo, dedup, cross-user isolation, drafts/private images, publish/expiry, favorite limits and admin revocation.
 - Startup validates 13 LINE message formats including URI portal entry; isolated portal Postgres smoke sends no LINE messages and cleans its synthetic identity.
-- Deployment/browser verification in progress; owner phone acceptance pending. OA display name/rich menu artwork have not been changed.
+- First portal deployment dep-db3tk4g473hc73btqmm0 LIVE at 2026-10-08 18:01:30Z. Postgres portal smoke PASS at 18:01:11Z, 13 official LINE format checks PASS. Browser homepage and public 539 controls render correctly; local cloud-browser connection unavailable, so QA used deployed service. Owner phone acceptance pending. OA display name/rich menu artwork have not been changed.
+
+- Final UI refinement runtime 43159aa35526225ad964be5f9f0ce07a0516f3e7: direct registration link at homepage top; seasonal Bingo toggle applies to public visitors too. Deployment dep-db3tm8u7bikc73ac96f0 LIVE at 2026-10-08 18:05:34Z (Taipei 02:05:34 Oct9). /health HTTP200 SUYING-V2.4-WEB-TEST; public activities200, unauthenticated portal401.
+- Rollback: restore b19e6dcc1c2456c6bb6e3d1a5660aa76b887924f preserving all DB data. New web auth/draft/campaign/favorite state is additive v2_state, no schema removal.
+- NEXT for new portal: owner sends 開啟甦贏 in research OA; phone login/road image/control acceptance; verify owner sees 活動管理; supply monthly/weekly images. OA account display name and native rich-menu artwork are still owner-managed and have not been renamed by this change.
