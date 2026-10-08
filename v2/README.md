@@ -32,3 +32,8 @@ gunicorn app:app --bind 0.0.0.0:$PORT --workers 1 --threads 4 --timeout 120
 ## Tests
 python -m pytest -q
 真實 LINE image download/reply、Render/Postgres migration、來源解析、mobile smoke 尚未驗收。
+
+## 2026-10-08 Render verified update
+36 local tests PASS; remote Postgres router/duplicate-event smoke PASS. Real 539 240 draws and Bingo 109 source-verified draws loaded. Fixed nullable new-member trial dates.
+Runtime auto-verification is active only on the isolated test service: locking 18:00–20:00, reconciliation after21:00, every5minutes while alive; idle sleep catches up upon awakening and never fabricates late forecasts. This is not an always-on production scheduler SLA.
+LINE @957ridwt credentials valid; its webhook still points elsewhere. Owner must identify/authorize a dedicated test OA before phone acceptance.

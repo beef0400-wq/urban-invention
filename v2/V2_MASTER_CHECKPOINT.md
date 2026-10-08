@@ -1,60 +1,56 @@
-# AI理性陪跑 V2 MASTER CHECKPOINT
+# AI理性陪跑 V2｜MASTER CHECKPOINT
 
-## CURRENT PHASE
-V2.1 本機 Test Candidate；未部署，不是手機真人測試 READY。
+## CURRENT
+Backend test deployment verified; LINE mobile acceptance BLOCKED by unconfirmed OA routing.
+Date: 2026-10-08 Asia/Taipei.
+Repository: beef0400-wq/urban-invention.
+Branch: v2-rational-companion-test-20261007.
+Runtime commit: f81914ce6cc4117716526729ec89604faa7bb56c.
+Service: srv-dami3j740ujc73b1acfg.
+Test DB: dpg-damhkgou01pc73aadrr0-a.
+URL: https://ai-rational-companion-v1-test.onrender.com
 
 ## DONE
-- 完整讀取三份 ZIP 的程式與 P0 變更，沿用百家 V15、539、Bingo 核心。
-- 百家珠盤截圖辨識候選 → 預覽 → 確認開始；單格修正／刪除／追加／重新匯入。
-- 批次紅藍和／BPT、快速連點後一次完成；每局單次輸入立即重算。
-- 多訊號分析、支持／反向訊號、規則指數不宣稱勝率；對子牌值選填。
-- 539 原演算法不變；今日母盤、核心5碼、Top3、逐號評分與2/3/4星輸出。
-- 539 開獎前鎖定、hash、不可覆寫、同日期對帳；7/30/90期含0命中公開驗證；不回填事後預測。
-- Bingo 20/50/100期盤、熱冷／升降溫／區段／大小單雙；模擬fallback完全停用。
-- 無真實來源、過期最新資料、無 provenance 舊 DB 不用於新分析。
-- 共用会员與三模式紀錄；修正試用誤判為正式會員與新百家帳號另開試用問題。
-- 全域導航、每使用者單程序鎖、重送event去重、簽章與會員驗證。
-- 新增 storage SQL migration、回滾文件、測試用排程workflow。
-- 26項本機測試通過；百家100組牌路與539一般/回補核心回歸一致。
-- 只讀確認既有 Render test / test DB users與analysis_logs schema；未寫入任何遠端DB。
+- Existing core retained: V15 baccarat and original 539 selection models.
+- Unified member permissions, mode navigation and records.
+- Batch road import / preview / correction / confirmation, one-click next-round update.
+- Conservative screenshot recognition; no guessed long-dragon or overlaid tie reconstruction.
+- 539 immutable pre-draw lock, same-date reconciliation, 7/30/90 reports including failures.
+- Bingo fabricated fallback disabled; validated source provenance and freshness gate.
+- Fixed current HTML tags; real source pagination loads 240 historical 539 draws.
+- Isolated test source/branch configured on Render, autoDeploy off; production untouched.
+- Schema baseline confirmed empty before migration. Preflight fixed DB guard, schema restore, up/down migration and transaction rollback PASS.
+- Fixed new Postgres baccarat user NULL trial date conversion crash.
+- 36 local tests PASS, including V15 100-road equivalence, 539 normal/recovery equivalence, source parsing, nullable trial dates and scheduler timing.
+- Remote signed webhook, unsigned rejection, shared member, batch confirmation/correction, one-click round, duplicate event, three-mode router and records PASS.
+- Remote real history: 539 240 draws (2026-01-05 through 2026-10-07); Bingo 109 verified source draws at latest smoke.
+- 2026-10-08 forecast locked at 16:06:42+08, SHA256 07dcccee4cf107738ecd672bbe451d0d2ce68c6b3cc3d3e1b4b3df405e7dee8e. Actual=NULL pending tonight's draw.
+- Free runtime scheduler: attempts pre-draw locking from 18:00 until 20:00; reconciles from 21:00, every 5 minutes while instance is alive. Awakening catches up results; never backfills late predictions.
+- LINE credentials valid (bot/info 200). OA: AI理性陪跑研究室 @957ridwt. Webhook active but does not match test URL; unchanged.
 
 ## DOING
-- 2026-10-08 台灣時間：Render 瀏覽器已登入；test 自動部署已關閉，尚未改 source 或執行部署。
-- 已保存空 test DB schema baseline（users/analysis_logs 均 0 筆）；新增部署前固定 DB guard 與隔離 schema migration/rollback rehearsal。
-- 最新本機 32 tests passed；新增 6 項部署資料庫 guard 測試。
-- 2026-10-07：改接 urban-invention 的隔離測試分支 v2-rational-companion-test-20261007。
-- 已核對兩個正式倉庫 app.py 與原 ZIP 完全一致（除尾端空行）。
-- 測試分支基底 commit：6dafef5ca66f4b33843c23a9c5279bb8b7806e68。
-- 已重新安裝依賴；2026-10-07 重跑 26 passed in 0.42s、compile 通過。推送 v2/ 目錄，不修改原有根目錄程式。
+- DONE: Final clean-start deploy dep-db3l08navr4c73a7vg6g LIVE at 2026-10-08 08:12:12Z; no repeated startup smoke. /health 200 with verification_scheduler=true; cron calls without secrets 403.
+- Save final report and evidence after health/live confirmation.
 
-## BLOCKED
-- 已解除原有倉庫權限問題；使用者指示忽略空 ai-rational-companion-v 倉庫。
-- 使用者已同意 Render 瀏覽器操作；正在設定既有測試站 source/branch/build/start，保留正式環境。
-- 真實百家平台路單尚未提供；大路龍尾／和局覆蓋／多區歧義保守拒絕，不能宣稱完成跨平台辨識。
+## BLOCKED / LIMITS
+- Need owner confirmation that @957ridwt is a dedicated test OA allowed to change webhook, or supply a separate test OA. Do not redirect existing production traffic without confirmation.
+- Real LINE receive/reply/image-download and phone acceptance NOT TESTED.
+- Need 3–5 real bead-plate road screenshots for platform calibration; synthetic images are not evidence of cross-platform accuracy.
+- Tonight's actual draw reconciliation cannot be verified before the draw.
+- Free Render idle sleeping means runtime scheduler is not an always-on SLA. For guaranteed production times, activate an external scheduler separately. GitHub workflows under v2/.github remain templates, not active schedules.
+- One worker / one instance only. Crash between application write and event completion remains a narrow duplicate-processing risk; do not claim exactly-once.
 
 ## NEXT
-1. 完成隔離分支 v2/ 推送，保留正式根目錄與 main 不變。
-2. 將既有 Render test 接到此分支，Build: pip install -r v2/requirements.txt；Start: cd v2 && gunicorn app:app --bind 0.0.0.0:$PORT --workers 1 --threads 4 --timeout 120。
-3. 備份測試DB，migration、Postgres會員／資料／rollback驗證。
-4. Render部署、來源實抓、LINE圖像／reply／簽章、手機Smoke／Regression。
-5. 設定排程所需測試URL與secret，確認18:00鎖盤與21:00對帳實際運行。
-6. 用至少3～5張真實珠盤截圖校準。
-7. 提供真正測試站READY報告；正式切換需本人確認且先做兩個production DB快照合併對帳。
+1. Confirm clean-start deployment live and /health scheduler=true.
+2. Persist report / screenshot; push checkpoint / README / rollback updates.
+3. Ask only for concrete OA routing confirmation and real screenshots.
+4. After OA confirmation: route authorized test channel, run LINE verify and owner phone script.
+5. Observe real post-draw reconciliation; check locked hash and same-date result preservation.
+6. Production migration/switch requires separate snapshots, member merge and owner approval.
 
-## FILES CHANGED
-app.py / membership.py / road_vision.py / legacy/baccarat.py / legacy/lotto539.py
-store.py / verification.py / v2_flows.py / tests/test_v2.py / tests/reference/*
-migrations/001_v2_up.sql / migrations/001_v2_down.sql / ROLLBACK.md
-README.md / render.yaml / .github/workflows/tests.yml / .github/workflows/verification.yml
-
-## TEST / DEPLOY STATUS
-Local: 26 passed；compile通過。
-Real screenshots: NOT TESTED。
-Remote DB migration / rollback rehearsal: NOT RUN。
-Real 539/Bingo fetch: NOT VERIFIED。
-GitHub push: 本 checkpoint 隨 V2 測試候選版提交至隔離分支；commit 以 GitHub HEAD 為準。
-Render V2 deploy: NOT RUN。
-LINE OA / mobile smoke: NOT RUN。
-Schedule activation: NOT RUN。
-Existing test URL: https://ai-rational-companion-v1-test.onrender.com（尚未更新為本版）。
-Production urban-invention、百家服務與兩個正式DB：未修改。
+## ROLLBACK
+Previous verified V2 deploy: dep-db3kv28m7kps73f3v6e0, runtime f81914c.
+Earlier verified V2 deploy: dep-db3ktd7avr4c73a7ksd0, runtime 6ab7574.
+Prefer application rollback preserving added tables. Do not drop member/history data.
+Original cross-repository source: ai-rational-companion-v1 / main, live dep-dami3jf40ujc73b1ada0. Returning to that source needs restoring repo/branch/build/start settings; do not assume cross-repository one-click rollback.
+See ROLLBACK.md and deployment/test_db_baseline.json.

@@ -1,0 +1,23 @@
+AI理性陪跑 V2｜Render 測試接續資料
+測試服務：ai-rational-companion-v1-test
+service ID：srv-dami3j740ujc73b1acfg
+測試網址：https://ai-rational-companion-v1-test.onrender.com
+Webhook：https://ai-rational-companion-v1-test.onrender.com/webhook
+來源：beef0400-wq/urban-invention
+分支：v2-rational-companion-test-20261007
+最新程式 commit：f81914ce6cc4117716526729ec89604faa7bb56c
+Render deploy：dep-db3l08navr4c73a7vg6g（最終正常啟動部署）
+
+手機測試順序：
+1. 使用獨立測試 LINE OA，確認 webhook 指向上面測試網址且 Use webhook 已開啟。
+2. 主選單→會員中心→免費體驗。
+3. 百家 AI→貼上：紅藍紅紅藍藍紅藍紅藍紅紅藍紅藍和。
+4. 修正 2 紅→確認開始→按一次紅，應立即增加一局並重算。
+5. 任意流程輸入539 AI、Bingo AI、主選單、會員中心，不能卡住。
+6. 539 AI→今日分析→母盤追蹤→驗證7／驗證30／驗證90。
+7. Bingo AI→即時盤，核對期別、時間、20／50／100期；資料異常應停止分析。
+8. 我的紀錄查看三模式共用紀錄。
+9. 傳實際珠盤路截圖，核對預覽／修正／確認；真實截圖仍需校準。
+
+已啟用免費測試runtime排程：18:00–20:00鎖盤，21:00後對帳；實例存活時每5分鐘檢查，休眠後喚醒補對帳，超時不補造預測。免費站不保證24小時運作。現有 v2/.github/workflows/verification.yml 只是範本，不能自動執行。隔離分支不是正式main，GitHub schedule 不會從此分支自動觸發。需獨立scheduler repo或測試專用排程，以及測試站 CRON_SECRET，才能驗收排程。
+正式main、正式服務、正式LINE webhook及正式DB未修改。

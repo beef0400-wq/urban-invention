@@ -19,3 +19,5 @@ deployment_preflight.py 在任何 legacy initializer 匯入前檢查固定測試
 001_v2_down.sql 只供確認五個 V2 表都是新建、且資料已導出時使用；不能當作完整 DB 還原。既有資料庫含同名 V2 表時不適用。
 
 正式切換前須另做兩個 production DB 的只讀快照合併與逐表對帳，不能把測試 DB 當正式來源。目前尚未執行合併或切換。
+
+2026-10-08最後測試部署：dep-db3l08navr4c73a7vg6g／f81914ce6cc4117716526729ec89604faa7bb56c。先前同版遠端smoke通過部署：dep-db3kv28m7kps73f3v6e0；較早版：dep-db3ktd7avr4c73a7ksd0／6ab7574。回滾維持相同urban-invention隔離分支和測試DB，正常Start使用README指令。schema rollback演練PASS，實際測試資料已存在，不得直接用空baseline覆蓋現況；如需資料還原須先新快照，另外建隔離DB。
