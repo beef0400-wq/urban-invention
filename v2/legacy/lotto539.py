@@ -6,6 +6,8 @@ import hmac
 import base64
 import hashlib
 import random
+import html as html_module
+from concurrent.futures import ThreadPoolExecutor
 import requests
 import psycopg2
 from contextlib import contextmanager
@@ -539,59 +541,41 @@ def weighted_sample(items, weights, k, seed):
 
 
 # ========= 539 真實資料 =========
+def source_text(markup):
+    markup = re.sub(r"<(?:script|style)\b[^>]*>.*?</(?:script|style)>", " ", markup, flags=re.S|re.I)
+    return re.sub(r"\s+", " ", html_module.unescape(re.sub(r"<[^>]+>", " ", markup)))
+
+
+def parse_539_page(markup):
+    text = source_text(markup)
+    pattern = re.compile(r"開獎日期[:：]\s*(\d{4})/(\d{1,2})/(\d{1,2})\s*\([^)]*\)\s*(\d{2})\s*,\s*(\d{2})\s*,\s*(\d{2})\s*,\s*(\d{2})\s*,\s*(\d{2})(?!\d)")
+    rows = {}
+    for m in pattern.finditer(text):
+        try:
+            d = date(*map(int, m.group(1, 2, 3)))
+            nums = list(map(int, m.group(4, 5, 6, 7, 8)))
+            if len(set(nums)) == 5 and all(1 <= n <= 39 for n in nums) and d <= today_tw():
+                rows[d] = fmt_nums(nums)
+        except ValueError:
+            continue
+    return sorted(rows.items(), reverse=True)
+
+
 def fetch_recent_539_results(max_rows=100):
-    r = HTTP.get(SOURCE_539_URL, timeout=15, headers={"User-Agent": "Mozilla/5.0"})
-    r.encoding = r.apparent_encoding or "utf-8"
-    html = r.text.replace("&nbsp;", " ").replace("\u3000", " ")
-
-    out = []
-    seen = set()
-
-    pattern = re.compile(
-        r"開獎日期[:：]\s*(\d{4})/(\d{1,2})/(\d{1,2}).{0,160}?"
-        r"(\d{2})[,\s]+(\d{2})[,\s]+(\d{2})[,\s]+(\d{2})[,\s]+(\d{2})",
-        re.S
-    )
-    for m in pattern.finditer(html):
-        try:
-            d = date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
-            nums = [int(m.group(i)) for i in range(4, 9)]
-            if len(set(nums)) != 5 or not all(1 <= n <= 39 for n in nums):
-                continue
-            if d in seen:
-                continue
-            seen.add(d)
-            out.append((d, fmt_nums(nums)))
-            if len(out) >= max_rows:
-                return out
-        except Exception:
-            continue
-
-    dates = list(re.finditer(r"(\d{4})/(\d{1,2})/(\d{1,2})", html))
-    for idx, dm in enumerate(dates):
-        try:
-            d = date(int(dm.group(1)), int(dm.group(2)), int(dm.group(3)))
-            if d in seen:
-                continue
-            start = dm.end()
-            end = dates[idx + 1].start() if idx + 1 < len(dates) else start + 800
-            chunk = html[start:end]
-            nums = []
-            for x in re.findall(r"\b\d{2}\b", chunk):
-                n = int(x)
-                if 1 <= n <= 39 and n not in nums:
-                    nums.append(n)
-                if len(nums) == 5:
-                    break
-            if len(nums) == 5:
-                seen.add(d)
-                out.append((d, fmt_nums(nums)))
-                if len(out) >= max_rows:
-                    break
-        except Exception:
-            continue
-
-    return out
+    def page(number):
+        r = requests.get(SOURCE_539_URL, params={"indexpage": number, "orderby": "new"}, timeout=15, headers={"User-Agent": "Mozilla/5.0"})
+        r.raise_for_status()
+        r.encoding = r.apparent_encoding or "utf-8"
+        return parse_539_page(r.text)
+    first = page(1)
+    if not first:
+        return []
+    pages = (max_rows + len(first) - 1) // len(first)
+    rows = dict(first)
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        for part in pool.map(page, range(2, pages + 1)):
+            rows.update(part)
+    return sorted(rows.items(), reverse=True)[:max_rows]
 
 
 def upsert_539_draws(rows):
@@ -607,7 +591,7 @@ def upsert_539_draws(rows):
 
 def ensure_latest_539_in_db():
     try:
-        rows = fetch_recent_539_results(max_rows=100)
+        rows = fetch_recent_539_results(max_rows=240 if len(load_539_draws(240)) < 240 else 30)
         upsert_539_draws(rows)
     except Exception as e:
         log("FETCH_539_ERROR:", repr(e))
@@ -1100,12 +1084,14 @@ def fetch_recent_bingo_results(max_rows=120):
         r = HTTP.get(SOURCE_BINGO_PILIO_URL, timeout=15, headers={"User-Agent": "Mozilla/5.0"})
         r.raise_for_status()
         r.encoding = r.apparent_encoding or "utf-8"
-        html = r.text.replace("&nbsp;", " ").replace("\u3000", " ")
+        html = source_text(r.text)
 
-        page_date = today_tw()
+        page_date = None
         dm = re.search(r"(\d{4})/(\d{1,2})/(\d{1,2})\s*BINGO", html)
         if dm:
             page_date = date(int(dm.group(1)), int(dm.group(2)), int(dm.group(3)))
+        if page_date is None or page_date > today_tw():
+            return []
 
         pattern = re.compile(
             r"[〖【]\s*期別:\s*(\d+)\s*[〗】]\s*"
@@ -1122,7 +1108,7 @@ def fetch_recent_bingo_results(max_rows=120):
             if period in seen:
                 continue
             nums = [int(x) for x in re.findall(r"\d{2}", m.group(2))]
-            if len(set(nums)) != 20 or not all(1<=n<=80 for n in nums):
+            if len(set(nums)) != 20 or not all(1<=n<=80 for n in nums) or int(m.group(3)) not in nums:
                 continue
             seen.add(period)
             out.append({

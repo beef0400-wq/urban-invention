@@ -197,3 +197,24 @@ def test_539_original_selection_regression(monkeypatch):
         monkeypatch.setattr(lo,'recent_539_performance_state',lambda:mode)
         a,b=original.build_539_models(draws),lo.build_539_models(draws)
         for key in ('motherboard','stable2','attack3','burst4','cold_note','pattern_note'):assert a[key]==b[key]
+
+
+def test_real_source_markup_is_not_style_numbers():
+    markup = '<style>.card {font-size: 24px}</style>開獎日期:2026/10/07(三)<span style="font-size:24px">05</span>, <span>11</span>, <span>14</span>, <span>18</span>, <span>19</span>'
+    assert lo.parse_539_page(markup) == [(date(2026,10,7), '05 11 14 18 19')]
+    assert lo.parse_539_page('開獎日期:2026/10/07(三) 05, 05, 14, 18, 19') == []
+    assert lo.parse_539_page('開獎日期:2026/10/07(三) 資料更新中 font-size:24px') == []
+
+
+def test_bingo_markup_and_date_required(monkeypatch):
+    class Response:
+        apparent_encoding = 'utf-8'
+        def raise_for_status(self): pass
+    nums = ',&nbsp;'.join(f'<span style="font-size:6vmin">{n:02d}</span>' for n in range(1,21))
+    response = Response()
+    response.text = '2026/10/8 BINGO <span>【期別: 115056947】</span><br/>'+nums+' 超級獎號: 01 (15:55)'
+    monkeypatch.setattr(lo.HTTP,'get',lambda *a,**k:response)
+    rows = lo.fetch_recent_bingo_results()
+    assert len(rows)==1 and rows[0]['numbers']==list(range(1,21)) and rows[0]['date']==date(2026,10,8)
+    response.text = response.text.replace('2026/10/8 BINGO', '')
+    assert lo.fetch_recent_bingo_results()==[]
