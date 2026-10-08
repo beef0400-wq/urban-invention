@@ -5,7 +5,7 @@ Backend deployed; owner-authorized research OA connected and LINE official verif
 Date: 2026-10-08 Asia/Taipei.
 Repository: beef0400-wq/urban-invention.
 Branch: v2-rational-companion-test-20261007.
-Runtime candidate: Experience V2.3.
+Runtime commit: b19e6dcc1c2456c6bb6e3d1a5660aa76b887924f.
 Service: srv-dami3j740ujc73b1acfg.
 Test DB: dpg-damhkgou01pc73aadrr0-a.
 URL: https://ai-rational-companion-v1-test.onrender.com
@@ -82,3 +82,5 @@ See ROLLBACK.md and deployment/test_db_baseline.json.
 - LINE startup validates 12 representative UI cases without sending messages. Mobile visual acceptance remains needed.
 
 - Remote isolated Postgres experience smoke PASS at 2026-10-08 16:08:45Z (undo/correction/resume/home/tracking). LINE validated 12 representative UI cases and 3 actual router replies. Synthetic identity was cleaned; verification marker prevents repeated experience smoke on restart.
+
+- Final deployment dep-db3s0iegekts73fv9m80 LIVE at 2026-10-08 16:10:58Z. /health 200, version INTEGRATED-V2.3-EXPERIENCE-TEST and verification_scheduler=true. 47 tests PASS. Normal restart skips previously verified experience smoke.
