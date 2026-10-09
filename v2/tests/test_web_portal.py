@@ -4,7 +4,7 @@ os.environ.pop('DATABASE_URL',None)
 os.environ['LOCAL_DB_PATH']='/tmp/rational-v2-test.sqlite3'
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 import pytest, cv2, numpy as np
-import app as g, web_portal as web, store, membership
+import app as g, web_portal as web, store, membership, account_access
 from legacy import baccarat as ba
 from datetime import timedelta
 
@@ -61,8 +61,10 @@ def test_trial_batch_confirmation_dedupe_and_shared_road():
 def test_account_binding_and_cross_user_isolation():
     with g.app.test_client() as c:
         h=login(c)
-        assert command(c,h,'綁定 hello_123',mode='539').status_code==200
-        assert ba.get_user('U_web')['bound_account']=='hello_123'
+        assert command(c,h,'綁定 hello_123',mode='539').status_code==400
+        profile=c.get('/api/portal',base_url=web.ORIGIN).json['account']
+        assert profile['code'].startswith('SY-') and profile['status']=='待開通'
+        assert account_access.resolve(profile['code'])=='U_web'
     with g.app.test_client() as other:
         h=login(other,'U_other')
         assert other.get('/api/portal',base_url=web.ORIGIN).json['road']==[]
@@ -162,3 +164,35 @@ def test_539_overview_separates_actual_and_forecast(monkeypatch):
         assert data['prediction']['motherboard']==[11,12,13,14,15]
         assert '已開獎' in data['status']
         assert 'no-store' in c.get('/api/539/overview').headers['Cache-Control']
+
+
+def test_independent_account_admin_grant_is_authorized_and_idempotent():
+    target='U_standalone';code=account_access.ensure(target)
+    with g.app.test_client() as c:
+        h=login(c,'U_admin')
+        assert c.post('/api/admin/accounts',base_url=web.ORIGIN,headers=h,json={}).status_code==403
+        g.ADMIN_USER_IDS={'U_admin'}
+        body={'code':code,'days':7,'request_id':'grant123456789012345'}
+        assert c.post('/api/admin/accounts',base_url=web.ORIGIN,json=body).status_code==403
+        out=c.post('/api/admin/accounts',base_url=web.ORIGIN,headers=h,json=body)
+        assert out.status_code==200 and out.json['account']['status']=='已開通'
+        expiry=membership.get_expiry(target)
+        assert c.post('/api/admin/accounts',base_url=web.ORIGIN,headers=h,json=body).status_code==200
+        assert membership.get_expiry(target)==expiry
+        body['days']=30
+        assert c.post('/api/admin/accounts',base_url=web.ORIGIN,headers=h,json=body).status_code==409
+        g.ADMIN_USER_IDS=set()
+        assert c.get('/api/admin/accounts',base_url=web.ORIGIN).status_code==403
+        assert c.post('/api/admin/accounts',base_url=web.ORIGIN,headers=h,json=body).status_code==403
+
+
+def test_expired_account_and_registration_removed():
+    with g.app.test_client() as c:
+        h=login(c)
+        first=c.get('/api/portal',base_url=web.ORIGIN).json['account']
+        membership._MEMORY['U_web'].update(trial_used=True,trial_expires_at=membership.now_tw()-timedelta(days=1))
+        after=c.get('/api/portal',base_url=web.ORIGIN).json['account']
+        assert first['code']==after['code'] and after['status']=='已到期' and not after['access']
+        html=c.get('/').data.decode()
+        assert 'aaawin' not in html and '個人中心' in html
+        assert 'register' not in c.get('/api/portal',base_url=web.ORIGIN).json

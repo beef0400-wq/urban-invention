@@ -5,7 +5,7 @@
 Date: 2026-10-09 Asia/Taipei.
 Repository: beef0400-wq/urban-invention.
 Branch: v2-rational-companion-test-20261007.
-Runtime commit: a7f9cac39d4ccd8edc148d8ee75e51f69d57c484 (SUYING-V2.5-CARDS-TEST).
+Runtime commit: d9f768a798596a654affbf5297a74d8bdabb226c (SUYING-V2.6-ORANGE-TEST); V2.7 independent accounts being deployed.
 Service: srv-dami3j740ujc73b1acfg.
 Test DB: dpg-damhkgou01pc73aadrr0-a.
 URL: https://ai-rational-companion-v1-test.onrender.com
@@ -117,4 +117,11 @@ Owner approved new brand 甦贏 and LINE -> full mobile website, simple first la
 - Optional panel prose collapsed under 看說明. Deeper report groups collapsed.
 - 539 overview separates previous actual draw, current target-date forecast, and current actual if available. Date identifies the draw; no fabricated official issue ID. Forecast only disclosed to an authenticated active member from immutable lock, never rebuilt on GET. Cache-Control private/no-store. Missing/unlocked status explicit.
 - LINE daily analysis also labels previous actual and current prediction dates; no algorithm changes.
-- 57 tests PASS including previous/current draw separation and member-only forecast disclosure. Deployment pending.
+- 57 tests PASS including previous/current draw separation and member-only forecast disclosure. V2.6 deployed LIVE dep-db47qe942hec73adkf2g at 2026-10-09 05:37:00Z; real previous draw 2026-10-08 [03,07,15,17,30], public forecast protected, orange homepage and 539 browser checked.
+
+## V2.7 standalone application accounts (owner accepted)
+- Independent stable SY identifiers automatically created on signed-in portal entry. No external registration/account binding/deposit qualifications.
+- Personal center shows own identifier/status/expiry; copy and optional activation explanation. External casino registration and binding removed from web template, portal response, command allowlist and campaign destinations.
+- Admin account activation uses SY identity only, 3/7/30 days and confirmation. Web role/CSRF required, per-target lock and request dedup with parameter mismatch rejection. Native LINE management also resolves SY accounts. No guessed admin role granted.
+- Existing membership durations and personal history retained; expired trial identified as expired in personal center.
+- 59 local tests PASS. Startup V27 synthetic Postgres smoke checks independent account creation/cleanup. Remote deployment and phone acceptance pending.

@@ -323,8 +323,9 @@ def test_bingo_window_filter_preserves_freshness(monkeypatch):
 
 def test_admin_button_confirmation_checks_permission_every_step(isolate,monkeypatch):
     monkeypatch.setattr(g,'ADMIN_USER_IDS',{'U1'})
-    paid();ba.ensure_user('U2');ba.update_user('U2',bound_account='member002')
-    send('管理開通 member002');send('管理天數 7')
+    import account_access
+    paid();ba.ensure_user('U2');code=account_access.ensure('U2')
+    send('管理開通 '+code);send('管理天數 7')
     assert not membership.has_access('U2')
     monkeypatch.setattr(g,'ADMIN_USER_IDS',set());send('確認開通會員')
     assert not membership.has_access('U2')

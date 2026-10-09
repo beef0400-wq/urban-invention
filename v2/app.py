@@ -12,7 +12,7 @@ import verification
 import v2_flows
 import line_ui
 import experience
-import admin_experience
+import admin_experience, account_access
 import web_portal
 import sys
 import threading
@@ -22,7 +22,7 @@ from legacy import baccarat
 from road_vision import parse_baccarat_road_image
 
 app = Flask(__name__)
-APP_VERSION = "SUYING-V2.6-ORANGE-TEST"
+APP_VERSION = "SUYING-V2.7-ACCOUNT-TEST"
 _USER_LOCKS = {}
 _LOCK_GUARD = threading.Lock()
 
@@ -237,7 +237,7 @@ def _handle_global_text(event, text, user_id, reply_token):
 
     if normalized in {"開啟甦贏", "甦贏", "手機主頁"}:
         link=web_portal.issue_link(user_id)
-        reply_text(reply_token,"甦贏｜手機主頁\n\n點下方按鈕，開始看盤、接續本桌或查看活動。\n此連結10分鐘內有效，請勿轉傳。",[("進入甦贏",link),("主選單","主選單")])
+        reply_text(reply_token,"甦贏｜手機主頁\n\n從LINE或網頁查看歷史資料與個人紀錄。甦贏帳號自動建立，無須另外註冊。\n此連結10分鐘內有效，請勿轉傳。",[("進入甦贏",link),("主選單","主選單")])
         return True
 
     if normalized in {"開始", "主選單", "回主選單", "首頁", "選單"}:
@@ -280,7 +280,7 @@ def _handle_global_text(event, text, user_id, reply_token):
         return True
 
     if normalized in {"會員中心", "查詢資格", "我的到期日"}:
-        reply_text(reply_token, "👤 會員中心\n\n" + membership.status_text(user_id), [
+        reply_text(reply_token, "個人中心\n\n甦贏帳號：" + account_access.ensure(user_id) + "\n" + membership.status_text(user_id), [
             ("免費體驗", "免費體驗"), ("539 AI", "539 AI"), ("百家 AI", "百家 AI"), ("主選單", "主選單")
         ] + ([("管理會員", "管理會員")] if user_id in ADMIN_USER_IDS else []))
         return True
@@ -315,27 +315,13 @@ def _handle_global_text(event, text, user_id, reply_token):
         _forward_to_legacy("539", event, "今日陪跑")
         return True
 
-    # One admin flow for both modes. Existing Baccarat /vip is intercepted here.
-    if normalized.startswith("/vip"):
+    if normalized.startswith(('/vip','/開通')):
         if user_id not in ADMIN_USER_IDS:
-            reply_text(reply_token, "此指令僅限管理員。")
-            return True
-        parts = normalized.split()
-        if len(parts) < 3:
-            reply_text(reply_token, "用法：/vip 遊戲帳號 天數")
-            return True
-        account = parts[1]
-        try:
-            days = int(parts[2])
-        except ValueError:
-            reply_text(reply_token, "天數需為數字。")
-            return True
-        target = baccarat.find_user_by_account(account)
-        if not target:
-            reply_text(reply_token, f"找不到帳號：{account}。請先完成百家帳號綁定。")
-            return True
-        exp = membership.grant_days(target["line_user_id"], days)
-        reply_text(reply_token, f"✅ 已開通整合會員\n帳號：{account}\n百家 AI＋539 AI＋Bingo AI 同時可用\n到期：{exp.strftime('%Y-%m-%d %H:%M')}")
+            reply_text(reply_token, '此指令僅限管理員。');return True
+        reply_text(reply_token,'請使用「管理會員」，選擇甦贏帳號與期限後確認開通。',[('管理帳號','管理會員')])
+        return True
+    if normalized=='綁定帳號' or normalized.startswith(('綁定 ','遊戲帳號 ')):
+        reply_text(reply_token,'甦贏帳號自動建立，無須綁定外部帳號。\n甦贏帳號：'+account_access.ensure(user_id),[('個人中心','會員中心'),('主選單','主選單')])
         return True
 
     return False

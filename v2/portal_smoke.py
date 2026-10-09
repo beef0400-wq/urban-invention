@@ -5,7 +5,7 @@ import cv2, numpy as np
 import app as g, membership, store, web_portal as web
 
 def main():
-    marker='__SUYING_PORTAL_V25_VERIFIED__'
+    marker='__SUYING_PORTAL_V27_VERIFIED__'
     if store.get_state(marker).get('passed'):
         print('SUYING_PORTAL_SMOKE already verified; skips repeated smoke',flush=True);return
     uid='__SUYING_PORTAL_SMOKE__'+uuid.uuid4().hex
@@ -16,7 +16,10 @@ def main():
             assert c.get(link,base_url=web.ORIGIN).status_code==302
             assert c.get(link,base_url=web.ORIGIN).status_code==401
             cookie=c.get_cookie(web.COOKIE,domain='ai-rational-companion-v1-test.onrender.com').value;keys.append(web.session_key(cookie))
-            data=c.get('/api/portal',base_url=web.ORIGIN).json;headers={'X-CSRF-Token':data['csrf']}
+            data=c.get('/api/portal',base_url=web.ORIGIN).json
+            keys.append('suying:account:'+data['account']['code'])
+            assert data['account']['code'].startswith('SY-') and 'register' not in data
+            headers={'X-CSRF-Token':data['csrf']}
             assert c.post('/api/command',base_url=web.ORIGIN,json={'command':'免費體驗','request_id':uuid.uuid4().hex}).status_code==403
             for cmd in ('免費體驗','牌路 紅藍紅紅藍藍紅藍紅藍紅紅藍紅藍和','確認開始','紅','撤回上一筆','今日追蹤'):
                 rid=uuid.uuid4().hex;keys.append('web:request:'+web.hashed(cookie+rid))

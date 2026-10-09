@@ -5,7 +5,7 @@ from urllib.parse import urlparse
 from contextvars import ContextVar
 import cv2, numpy as np
 from flask import request, abort, jsonify, render_template, redirect, make_response
-import membership, store, line_ui, experience, v2_flows
+import membership, store, line_ui, experience, v2_flows, account_access
 from legacy import baccarat as ba
 
 CAPTURE = ContextVar('web_reply_capture', default=None)
@@ -14,7 +14,7 @@ COOKIE = 'suying_session'
 CAMPAIGNS = '__suying_campaigns__'
 DRAFTS = '__suying_campaign_drafts__'
 SETTINGS = '__suying_home_settings__'
-COMMANDS = {'主選單','百家 AI','539 AI','Bingo AI','今日陪跑','今日追蹤','驗證7','驗證30','驗證90','即時盤','20期','50期','100期','會員中心','免費體驗','我的紀錄','使用教學','繼續本桌','詳細分析','撤回上一筆','修正本桌','確認修正','取消更新','更新本桌','換新桌','結束分析','匯入牌路','匯入莊','匯入閒','匯入和','撤回匯入','清空匯入','確認開始','完成匯入','修正牌路','莊','閒','和','紅','藍','綁定帳號','查看待確認牌路','開始新桌'}
+COMMANDS = {'主選單','百家 AI','539 AI','Bingo AI','今日陪跑','今日追蹤','驗證7','驗證30','驗證90','即時盤','20期','50期','100期','會員中心','免費體驗','我的紀錄','使用教學','繼續本桌','詳細分析','撤回上一筆','修正本桌','確認修正','取消更新','更新本桌','換新桌','結束分析','匯入牌路','匯入莊','匯入閒','匯入和','撤回匯入','清空匯入','確認開始','完成匯入','修正牌路','莊','閒','和','紅','藍','查看待確認牌路','開始新桌'}
 
 def hashed(token): return hashlib.sha256(token.encode()).hexdigest()
 def session_key(token): return 'web:session:'+hashed(token)
@@ -43,7 +43,7 @@ def clean_campaign(raw):
     end=datetime.fromisoformat(raw.get('end','')).replace(tzinfo=membership.TZ_TW)
     if end<=start: raise ValueError('結束時間必須晚於開始時間。')
     target=raw.get('target','member')
-    if target not in ('member','baccarat','539','bingo','register'): raise ValueError('請選擇有效活動入口。')
+    if target not in ('member','baccarat','539','bingo'): raise ValueError('請選擇有效活動入口。')
     return dict(kind=kind,title=title,content=content,start=start.isoformat(),end=end.isoformat(),target=target)
 
 def active_campaigns():
@@ -74,9 +74,35 @@ def install(g):
     def portal():
         data=identity();uid=data['uid'];membership.ensure_user(uid)
         user=ba.get_user(uid) or {};state=store.get_state(uid)
-        return jsonify(csrf=data['csrf'],member=membership.status_text(uid),access=membership.has_access(uid),admin=uid in g.ADMIN_USER_IDS,
+        return jsonify(account=account_access.profile(uid),csrf=data['csrf'],member=membership.status_text(uid),access=membership.has_access(uid),admin=uid in g.ADMIN_USER_IDS,
                        road=[{'莊':'紅','閒':'藍','和':'和'}.get(x,x) for x in user.get('current_road',[])],active=bool(user.get('analysis_active')),
-                       favorites=state.get('favorites_539',[]),bingo_featured=bool(store.get_state(SETTINGS).get('bingo_featured')),pending=bool(state.get('pending')),campaigns=active_campaigns(),register='https://AI001.aaawin88.com',line='https://line.me/R/ti/p/@957ridwt')
+                       favorites=state.get('favorites_539',[]),bingo_featured=bool(store.get_state(SETTINGS).get('bingo_featured')),pending=bool(state.get('pending')),campaigns=active_campaigns(),line='https://line.me/R/ti/p/@957ridwt')
+
+    @app.route('/api/admin/accounts', methods=['GET','POST'])
+    def admin_accounts():
+        data=identity()
+        if data['uid'] not in g.ADMIN_USER_IDS: abort(403)
+        if request.method=='GET':
+            return jsonify(items=[account_access.profile(uid) for code,uid in account_access.recent()])
+        csrf(data)
+        raw=request.get_json(silent=True) or {}
+        code=str(raw.get('code','')).strip().upper()
+        days=raw.get('days')
+        rid=str(raw.get('request_id',''))
+        if type(days) is not int or days not in (3,7,30) or not re.fullmatch(r'[A-Za-z0-9_-]{16,80}',rid):abort(400)
+        target=account_access.resolve(code)
+        if not target:return jsonify(error='查無甦贏帳號，請對方先從LINE進入一次。'),404
+        with g.user_lock(target):
+            key='web:grant:'+hashed(request.cookies[COOKIE]+rid)
+            cached=store.get_state(key)
+            if cached:
+                if cached.get('code')!=code or cached.get('days')!=days:abort(409)
+                return jsonify(cached)
+            membership.grant_days(target,days)
+            out=dict(code=code,days=days,account=account_access.profile(target))
+            store.record(data['uid'],'admin',{'kind':'甦贏帳號開通','code':code,'days':days})
+            store.put_state(key,out)
+        return jsonify(out)
 
     @app.get('/api/539/overview')
     def lotto_overview():
@@ -129,15 +155,14 @@ def install(g):
     @app.post('/api/command')
     def command():
         data=identity();csrf(data);uid=data['uid'];raw=request.get_json(silent=True) or {};cmd=str(raw.get('command','')).strip()
-        if cmd not in COMMANDS and not re.fullmatch(r'(?:牌路 [紅藍和\s]{1,600}|追加 [紅藍和\s]{1,600}|修正 \d{1,3} [紅藍和]|刪除 \d{1,3}|綁定 [A-Za-z0-9_-]{1,40})',cmd):abort(400)
+        if cmd not in COMMANDS and not re.fullmatch(r'(?:牌路 [紅藍和\s]{1,600}|追加 [紅藍和\s]{1,600}|修正 \d{1,3} [紅藍和]|刪除 \d{1,3})',cmd):abort(400)
         rid=str(raw.get('request_id',''))
         if not re.fullmatch(r'[A-Za-z0-9_-]{16,80}',rid):abort(400)
         with g.user_lock(uid):
             key='web:request:'+hashed(request.cookies[COOKIE]+rid);cached=store.get_state(key)
             if cached:return jsonify(cached)
             mode=raw.get('mode')
-            if cmd.startswith('綁定 '):membership.set_mode(uid,'baccarat')
-            elif mode in ('baccarat','539','bingo'):membership.set_mode(uid,mode)
+            if mode in ('baccarat','539','bingo'):membership.set_mode(uid,mode)
             if membership.get_mode(uid)=='baccarat':ba.ensure_user(uid)
             if cmd=='開始新桌':
                 experience.clear_live_table(uid)

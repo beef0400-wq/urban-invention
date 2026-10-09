@@ -1,5 +1,5 @@
 """Confirmed native-button membership management; admin authorization on every step."""
-import store,membership
+import store,membership,account_access
 from legacy import baccarat as ba
 
 def handle(g,text,uid,token):
@@ -9,17 +9,12 @@ def handle(g,text,uid,token):
     state=store.get_state(uid)
     if text=='管理會員':
         state.pop('member_action',None);store.put_state(uid,state)
-        if ba.use_db():
-            with ba.db_conn() as conn:
-                with conn.cursor() as c:
-                    c.execute('SELECT line_user_id,bound_account FROM users WHERE bound_account IS NOT NULL ORDER BY updated_at DESC LIMIT 50');rows=c.fetchall()
-        else:rows=[(k,v.get('bound_account')) for k,v in ba.MEMORY_USERS.items() if v.get('bound_account')]
-        candidates=[(u,a) for u,a in rows if a and not membership.has_access(u)][:10]
-        msg='會員中心｜管理會員\n\n選擇要開通的帳號，再選天數並確認。\n優先顯示最近綁定、目前無完整權限的10位。\n也可輸入：管理開通 帳號'
+        candidates=[(u,a) for a,u in account_access.recent() if not membership.has_access(u)]
+        msg='個人中心｜管理帳號\n\n選擇甦贏帳號，再選天數並確認。\n也可輸入：管理開通 SY-帳號編號'
         g.reply_text(token,msg,[(a[:20],'管理開通 '+a) for _,a in candidates]+[('主選單','主選單')]);return True
     if text.startswith('管理開通 '):
-        account=text.split(maxsplit=1)[1];target=ba.find_user_by_account(account)
-        if not target:g.reply_text(token,'查無已綁定帳號，請會員先綁定。',[('返回管理','管理會員')]);return True
+        account=text.split(maxsplit=1)[1].upper();target_uid=account_access.resolve(account);target={'line_user_id':target_uid} if target_uid else None
+        if not target:g.reply_text(token,'查無甦贏帳號，請對方先從LINE進入一次。',[('返回管理','管理會員')]);return True
         state['member_action']={'uid':target['line_user_id'],'account':account};store.put_state(uid,state)
         g.reply_text(token,'會員中心｜選擇天數\n\n帳號：'+account+'\n'+membership.status_text(target['line_user_id']),[(f'{n}天',f'管理天數 {n}') for n in (3,7,30)]+[('取消','取消會員操作')]);return True
     if text=='取消會員操作':
@@ -32,9 +27,9 @@ def handle(g,text,uid,token):
         action['days']=days;state['member_action']=action;store.put_state(uid,state)
         g.reply_text(token,f'會員中心｜開通確認\n\n帳號：{action["account"]}\n天數：{days}天\n範圍：百家＋539＋賓果\n有效正式會員會從原到期日延長，其他資格從現在起算。',[('確認開通','確認開通會員'),('取消','取消會員操作')]);return True
     if text=='確認開通會員' and action.get('days') in (3,7,30):
-        target=ba.find_user_by_account(action['account'])
+        target_uid=account_access.resolve(action['account']);target={'line_user_id':target_uid} if target_uid else None
         if not target or target['line_user_id']!=action['uid']:
-            state.pop('member_action',None);store.put_state(uid,state);g.reply_text(token,'帳號綁定已變更，請重新選擇。',[('返回管理','管理會員')]);return True
+            state.pop('member_action',None);store.put_state(uid,state);g.reply_text(token,'甦贏帳號已變更，請重新選擇。',[('返回管理','管理會員')]);return True
         exp=membership.grant_days(action['uid'],action['days'])
         state.pop('member_action',None);store.put_state(uid,state)
         store.record(uid,'admin',{'kind':'開通會員','account':action['account'],'days':action['days']})
