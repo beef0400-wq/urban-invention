@@ -158,4 +158,5 @@ Owner approved new brand 甦贏 and LINE -> full mobile website, simple first la
 - 539 default card keeps previous actual draw, current forecast motherboard/core and 2/3/4 combinations. Model description/structure, per-number diagnostics and recent records moved to separate actions. Same locked model data; detail reads do not record new forecasts or regenerate numbers.
 - Recent public records default to 5 periods with separate forecast/actual labels. Full 5-period audit via separate button. Personal history limited to 5 calendar days and 5 entries, Taiwan time. Older stored data preserved.
 - Tutorial hub covers baccarat/539/Bingo, with dedicated instructions and interpretation guides; corresponding browser help updated.
-- 85 pytest tests PASS and node --check PASS; deployment pending.
+- 85 pytest tests PASS and node --check PASS.
+- Runtime commit 3c4ed9dfaa92c99a1bffa838744e2fff8473a6ea; deploy dep-db4beu67bikc73e70eg0 LIVE 2026-10-09T09:45:33Z. Remote health 200 V2.9, updated browser copy verified, DB preflight PASS and 17 LINE Flex types validated PASS. Native device visual acceptance remains owner review.
