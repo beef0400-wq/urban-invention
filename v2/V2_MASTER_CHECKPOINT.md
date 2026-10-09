@@ -5,7 +5,7 @@
 Date: 2026-10-09 Asia/Taipei.
 Repository: beef0400-wq/urban-invention.
 Branch: v2-rational-companion-test-20261007.
-Runtime commit: d9f768a798596a654affbf5297a74d8bdabb226c (SUYING-V2.6-ORANGE-TEST); V2.7 independent accounts being deployed.
+Runtime commit: 4dd9a85beb207ced38ed3ed92dc6e99865fb09b4 (SUYING-V2.7-ACCOUNT-TEST).
 Service: srv-dami3j740ujc73b1acfg.
 Test DB: dpg-damhkgou01pc73aadrr0-a.
 URL: https://ai-rational-companion-v1-test.onrender.com
@@ -124,4 +124,4 @@ Owner approved new brand 甦贏 and LINE -> full mobile website, simple first la
 - Personal center shows own identifier/status/expiry; copy and optional activation explanation. External casino registration and binding removed from web template, portal response, command allowlist and campaign destinations.
 - Admin account activation uses SY identity only, 3/7/30 days and confirmation. Web role/CSRF required, per-target lock and request dedup with parameter mismatch rejection. Native LINE management also resolves SY accounts. No guessed admin role granted.
 - Existing membership durations and personal history retained; expired trial identified as expired in personal center.
-- 59 local tests PASS. Startup V27 synthetic Postgres smoke checks independent account creation/cleanup. Remote deployment and phone acceptance pending.
+- 59 local tests PASS. Startup V27 synthetic Postgres smoke checks independent account creation/cleanup. Deployment dep-db484l7lot8c73859s30 LIVE at 2026-10-09 05:59:21Z. Postgres V27 smoke PASS at 05:59:14Z and 13 official LINE format validations PASS at 05:58:31Z. Browser confirms external registration removed and 個人中心 header shown. Owner phone/account/admin acceptance remains pending; no real account grants performed.
