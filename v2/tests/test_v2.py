@@ -52,7 +52,7 @@ def test_global_navigation_clears_legacy_pending(isolate):
 def test_free_cannot_use_alias_or_batch(isolate):
     send('百家 AI');send('牌路 '+road());send('紅')
     assert not ba.ensure_user('U1')['analysis_active']
-    assert '體驗' in isolate[-1][0]
+    assert '試用' in isolate[-1][0]
 
 def test_trial_persists_and_no_repeat():
     membership.start_trial('U1');membership._MEMORY.clear()
@@ -354,3 +354,38 @@ def test_first_message_creates_application_account(isolate):
     import account_access
     g.process_event(event('主選單','Unew'))
     assert any(uid=='Unew' for _,uid in account_access.recent())
+
+def test_username_binding_confirmation_and_trial_shutdown(isolate):
+    import account_access
+    send('綁定帳號');send('player_123')
+    assert not account_access.profile('U1')['username']
+    send('確認綁定')
+    assert account_access.profile('U1')['username']=='player_123'
+    assert '請回小幫手驗證開通' in isolate[-1][0]
+    assert not membership.has_access('U1')
+    send('免費體驗');assert not membership.has_access('U1')
+    send('會員中心');assert all(command!='免費體驗' for _,command in isolate[-1][1])
+    assert account_access.resolve('PLAYER_123')=='U1'
+    with pytest.raises(ValueError):account_access.bind('U2','Player_123')
+    with pytest.raises(ValueError):account_access.bind('U1','changed_name')
+    assert account_access.bind('U1','PLAYER_123')=='player_123'
+
+def test_one_hour_trial_binding_keeps_expiry_and_enforces_all_modes(isolate,monkeypatch):
+    import account_access
+    start=membership.now_tw();monkeypatch.setattr(membership,'now_tw',lambda:start)
+    send('免費體驗');assert membership.get_expiry('U1')==start+timedelta(hours=1)
+    account_access.bind('U1','sample_123')
+    assert membership.has_access('U1') and not account_access.profile('U1')['trial_available']
+    monkeypatch.setattr(membership,'now_tw',lambda:start+timedelta(hours=1,seconds=1))
+    assert not membership.has_access('U1')
+    for mode,command in [('百家 AI','紅'),('539 AI','今日陪跑'),('Bingo AI','即時盤')]:
+        send(mode);send(command)
+        assert '到期' in isolate[-1][0] and '小幫手' in isolate[-1][0]
+        assert all(cmd!='免費體驗' for _,cmd in isolate[-1][1])
+    assert membership.start_trial('U1')[1]=='bound'
+
+def test_binding_cancel_and_invalid(isolate):
+    import account_access
+    send('綁定帳號');send('<script>');assert '4～20' in isolate[-1][0]
+    send('cancel_123');send('取消綁定');send('確認綁定')
+    assert account_access.profile('U1')['username'] is None

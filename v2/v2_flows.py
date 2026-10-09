@@ -1,5 +1,6 @@
 import re
 from datetime import datetime, timedelta
+import account_access
 import store, membership, verification, experience
 from legacy import baccarat as ba, lotto539 as lo
 
@@ -73,7 +74,7 @@ def handle(g,event,text,uid,token):
     batch=parse_batch(text) if mode=='baccarat' else None
     handled=is_bingo or (mode=='539' and text in ('今日陪跑','今日分析','今日 AI 分析')) or (mode=='baccarat' and (batch is not None or text in ('匯入牌路','確認開始','完成匯入','撤回匯入','清空匯入','修正牌路','匯入莊','匯入閒','匯入和','繼續本桌','修正本桌','撤回上一筆','更新本桌','換新桌','取消更新','確認修正') or text.startswith(('修正 ','刪除 ','追加 ','牌路','快速牌路'))))
     if not handled:return False
-    if not membership.has_access(uid):g.reply_text(token,'請先開啟免費體驗或會員。',[('免費體驗','免費體驗'),('會員中心','會員中心')]);return True
+    if not membership.has_access(uid):g.reply_text(token,account_access.access_notice(uid),account_access.trial_buttons(uid)+[('綁定帳號','綁定帳號'),('會員中心','會員中心')]);return True
     if is_bingo:
         membership.set_mode(uid,'bingo');msg=bingo_board(int(text[:-1]) if text in ('20期','50期','100期') else None);store.record(uid,'bingo',{'kind':'即時盤','text':msg});g.reply_text(token,msg,g.mode_menu('bingo'));return True
     if mode=='539':

@@ -12,7 +12,7 @@ import verification
 import v2_flows
 import line_ui
 import experience
-import admin_experience, account_access
+import admin_experience, account_access, account_binding
 import web_portal
 import sys
 import threading
@@ -22,7 +22,7 @@ from legacy import baccarat
 from road_vision import parse_baccarat_road_image
 
 app = Flask(__name__)
-APP_VERSION = "SUYING-V2.7.2-ADMIN-LIST-TEST"
+APP_VERSION = "SUYING-V2.8-BIND-TRIAL-TEST"
 _USER_LOCKS = {}
 _LOCK_GUARD = threading.Lock()
 
@@ -91,7 +91,7 @@ def _road_preview(seq, limit=36):
 
 def handle_baccarat_image(event, user_id, reply_token):
     if not membership.has_access(user_id):
-        reply_text(reply_token, "這是會員／體驗功能。先開啟免費體驗即可使用百家路單截圖辨識。", [("免費體驗", "免費體驗"), ("會員中心", "會員中心")])
+        reply_text(reply_token, account_access.access_notice(user_id), account_access.trial_buttons(user_id)+[("綁定帳號", "綁定帳號"), ("會員中心", "會員中心")])
         return
     message_id = event.get("message", {}).get("id")
     image_bytes = fetch_line_image(message_id)
@@ -125,6 +125,7 @@ def main_menu_items():
         ("我的紀錄", "我的紀錄"),
         ("使用教學", "使用教學"),
         ("會員中心", "會員中心"),
+        ("綁定帳號", "綁定帳號"),
     ]
 
 
@@ -196,7 +197,7 @@ def _forward_to_legacy(engine, event, replacement_text=None):
     if replacement_text is not None: cloned['message']['text']=replacement_text
     text=cloned.get('message',{}).get('text','')
     if not membership.has_access(uid) and not (text in {'綁定帳號','/myid','我的ID','/adminhelp','/待開通','找管理員','申請加入會員'} or text.startswith(('綁定 ','遊戲帳號 ','確認 ','待確認'))):
-        reply_text(cloned.get('replyToken'),'請先開啟免費體驗或會員。',[('免費體驗','免費體驗'),('主選單','主選單')]);return
+        reply_text(cloned.get('replyToken'),account_access.access_notice(uid),account_access.trial_buttons(uid)+[('綁定帳號','綁定帳號'),('主選單','主選單')]);return
     payload=json.dumps({'events':[cloned]},ensure_ascii=False).encode()
     if engine=='baccarat':
         before=baccarat.get_user(uid)
@@ -280,19 +281,19 @@ def _handle_global_text(event, text, user_id, reply_token):
         return True
 
     if normalized in {"會員中心", "查詢資格", "我的到期日"}:
-        reply_text(reply_token, "個人中心\n\n甦贏帳號：" + account_access.ensure(user_id) + "\n" + membership.status_text(user_id), [
-            ("免費體驗", "免費體驗"), ("539 AI", "539 AI"), ("百家 AI", "百家 AI"), ("主選單", "主選單")
-        ] + ([("管理會員", "管理會員")] if user_id in ADMIN_USER_IDS else []))
+        reply_text(reply_token, "個人中心\n\n甦贏帳號：" + (account_access.profile(user_id)["username"] or "尚未綁定") + "\n" + membership.status_text(user_id), [
+            ("綁定帳號", "綁定帳號"), ("539 AI", "539 AI"), ("百家 AI", "百家 AI"), ("主選單", "主選單")
+         ] + account_access.trial_buttons(user_id) + ([("管理會員", "管理會員")] if user_id in ADMIN_USER_IDS else []))
         return True
 
-    if normalized in {"免費體驗", "免費試用", "試用一天", "免費使用1天", "免費使用一天"}:
-        exp, status = membership.start_trial(user_id, 24)
+    if normalized in {"免費體驗", "免費試用", "免費試用1小時", "試用1小時", "試用一天", "免費使用1天", "免費使用一天"}:
+        exp, status = membership.start_trial(user_id, 1)
         if status == "opened":
-            reply_text(reply_token, "✅ 免費體驗已開通\n\n百家 AI＋539 AI＋Bingo AI 同時可使用。\n到期：" + exp.strftime("%Y-%m-%d %H:%M"), main_menu_items())
+            reply_text(reply_token, "✅ 免費試用1小時已開通\n\n百家 AI＋539 AI＋Bingo AI 同時可使用。\n到期：" + exp.strftime("%Y-%m-%d %H:%M"), main_menu_items())
         elif status == "already_member":
             reply_text(reply_token, "你目前已有完整使用權限。\n\n" + membership.status_text(user_id), main_menu_items())
         else:
-            reply_text(reply_token, "此 LINE 帳號已使用過免費體驗。\n\n" + membership.status_text(user_id), main_menu_items())
+            reply_text(reply_token, "免費試用無法再次開啟。請綁定帳號後回小幫手驗證開通。\n\n" + membership.status_text(user_id), main_menu_items())
         return True
 
     if normalized == "使用教學":
@@ -319,9 +320,6 @@ def _handle_global_text(event, text, user_id, reply_token):
         if user_id not in ADMIN_USER_IDS:
             reply_text(reply_token, '此指令僅限管理員。');return True
         reply_text(reply_token,'請使用「管理會員」，選擇甦贏帳號與期限後確認開通。',[('管理帳號','管理會員')])
-        return True
-    if normalized=='綁定帳號' or normalized.startswith(('綁定 ','遊戲帳號 ')):
-        reply_text(reply_token,'甦贏帳號自動建立，無須綁定外部帳號。\n甦贏帳號：'+account_access.ensure(user_id),[('個人中心','會員中心'),('主選單','主選單')])
         return True
 
     return False
@@ -395,6 +393,8 @@ def process_event(event):
         return
 
     text = (message.get("text") or "").strip()
+    if account_binding.handle(sys.modules[__name__],text,user_id,reply_token):
+        return
     if admin_experience.handle(sys.modules[__name__],text,user_id,reply_token):
         return
     if v2_flows.handle(sys.modules[__name__], event, text, user_id, reply_token):

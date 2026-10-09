@@ -142,3 +142,11 @@ Owner approved new brand 甦贏 and LINE -> full mobile website, simple first la
 - Owner verified LINE admin command reaches management screen; list was empty because only inactive accounts were shown and message entry did not create application identities.
 - Create application account on LINE event entry; admin list includes recent trial, paid, and inactive accounts with clear status. No membership granted by viewing list.
 - Added regression coverage for first-message account creation and selecting trial/paid/free accounts. Deployment pending.
+
+
+## V2.8 username binding / one-hour trial (2026-10-09)
+- Users bind a 4–20 character ASCII username from LINE or authenticated personal center; confirmation, cancellation, case-insensitive unique index, immutable binding. Binding never grants membership. Success asks users to return to helper for verification. Helper URL not supplied; no invented link.
+- Admin list shows bound usernames and accepts username or existing internal SY code. Internal IDs and membership data preserved.
+- New trials last one hour, once per LINE identity, all three modes. Bound users cannot start trials; binding preserves an already-running expiry. Existing trial expiries preserved. UI hides unavailable trial buttons; server rejects replay.
+- Browser open-page expiry reminder polls locally every 15 seconds and refreshes server status; LINE reminds on next operation. No unsolicited scheduled LINE push configured.
+- Verification: 80 pytest tests pass; node --check passes. Includes auth/CSRF, cross-user collision, manual grant, one-hour expiry and mode guards. Deployment pending.

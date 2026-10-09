@@ -196,3 +196,22 @@ def test_expired_account_and_registration_removed():
         html=c.get('/').data.decode()
         assert 'aaawin' not in html and '個人中心' in html
         assert 'register' not in c.get('/api/portal',base_url=web.ORIGIN).json
+
+def test_bind_endpoint_authenticated_and_manual_grant():
+    with g.app.test_client() as c:
+        assert c.post('/api/account/bind',json={'username':'sample_123'}).status_code==401
+        h=login(c)
+        assert c.post('/api/account/bind',base_url=web.ORIGIN,json={'username':'sample_123'}).status_code==403
+        def bind(name):return c.post('/api/account/bind',base_url=web.ORIGIN,headers=h,json={'username':name,'uid':'U_other'})
+        assert bind('<script>').status_code==409
+        out=bind('sample_123');assert out.status_code==200
+        assert not out.json['account']['access'] and not out.json['account']['trial_available']
+        assert account_access.resolve('sample_123')=='U_web'
+        assert bind('SAMPLE_123').status_code==200
+        assert bind('another_123').status_code==409
+        g.ADMIN_USER_IDS={'U_web'}
+        out=c.post('/api/admin/accounts',base_url=web.ORIGIN,headers=h,json={'code':'sample_123','days':3,'request_id':'bindgrant01234567890'})
+        assert out.status_code==200 and out.json['account']['access']
+    with g.app.test_client() as c:
+        h=login(c,'U_other')
+        assert c.post('/api/account/bind',base_url=web.ORIGIN,headers=h,json={'username':'Sample_123'}).status_code==409

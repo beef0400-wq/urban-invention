@@ -198,6 +198,8 @@ def get_status(user_id):
         return "TRIAL", trial_exp
     if row.get("plan_status") == "PAID" or paid_exp:
         return "EXPIRED", paid_exp
+    if trial_exp:
+        return "EXPIRED", trial_exp
     return "FREE", None
 
 
@@ -221,11 +223,14 @@ def has_used_trial(user_id):
     return bool(_membership_row(user_id).get("trial_used"))
 
 
-def start_trial(user_id, hours=24):
+def start_trial(user_id, hours=1):
     ensure_user(user_id)
     status, expiry = get_status(user_id)
     if status == "PAID":
         return expiry, "already_member"
+    import account_access
+    if account_access.profile(user_id).get('username'):
+        return None, 'bound'
     if has_used_trial(user_id):
         return None, "used"
     started = now_tw()

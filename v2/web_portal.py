@@ -78,6 +78,15 @@ def install(g):
                        road=[{'莊':'紅','閒':'藍','和':'和'}.get(x,x) for x in user.get('current_road',[])],active=bool(user.get('analysis_active')),
                        favorites=state.get('favorites_539',[]),bingo_featured=bool(store.get_state(SETTINGS).get('bingo_featured')),pending=bool(state.get('pending')),campaigns=active_campaigns(),line='https://line.me/R/ti/p/@957ridwt')
 
+    @app.post('/api/account/bind')
+    def bind_account():
+        data=identity();csrf(data);uid=data['uid']
+        raw=request.get_json(silent=True) or {}
+        with g.user_lock(uid):
+            try:account_access.bind(uid,raw.get('username',''))
+            except ValueError as e:return jsonify(error=str(e)),409
+        return jsonify(account=account_access.profile(uid),message=account_access.SUCCESS)
+
     @app.route('/api/admin/accounts', methods=['GET','POST'])
     def admin_accounts():
         data=identity()
