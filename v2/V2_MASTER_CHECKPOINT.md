@@ -149,4 +149,5 @@ Owner approved new brand 甦贏 and LINE -> full mobile website, simple first la
 - Admin list shows bound usernames and accepts username or existing internal SY code. Internal IDs and membership data preserved.
 - New trials last one hour, once per LINE identity, all three modes. Bound users cannot start trials; binding preserves an already-running expiry. Existing trial expiries preserved. UI hides unavailable trial buttons; server rejects replay.
 - Browser open-page expiry reminder polls locally every 15 seconds and refreshes server status; LINE reminds on next operation. No unsolicited scheduled LINE push configured.
-- Verification: 80 pytest tests pass; node --check passes. Includes auth/CSRF, cross-user collision, manual grant, one-hour expiry and mode guards. Deployment pending.
+- Verification: 80 pytest tests pass; node --check passes. Includes auth/CSRF, cross-user collision, manual grant, one-hour expiry and mode guards.
+- Runtime commit 65a8918c85880a226349e35a739604e8b997dbed; deploy dep-db4b6k59fdbs73bdncc0 LIVE 2026-10-09T09:27:52Z. Database preflight and 13 LINE message validations PASS.
