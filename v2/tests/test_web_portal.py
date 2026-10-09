@@ -142,3 +142,23 @@ def test_new_table_discards_live_progress_but_preserves_membership_and_records()
         assert data['access'] is True and data['favorites']==[1,2]
         assert store.history('U_web')
         assert 'undo' not in store.get_state('U_web')
+
+
+def test_539_overview_separates_actual_and_forecast(monkeypatch):
+    from legacy import lotto539 as engine
+    import verification
+    from datetime import date, datetime
+    monkeypatch.setattr(membership, 'now_tw', lambda: datetime(2026,10,9,13,tzinfo=membership.TZ_TW))
+    monkeypatch.setattr(engine, 'load_539_draws', lambda limit: [(date(2026,10,9),[2,4,6,8,10]),(date(2026,10,8),[1,3,5,7,9])])
+    monkeypatch.setattr(verification,'locked_pack',lambda target: {'note':json.dumps({'motherboard':'11 12 13 14 15'})})
+    with g.app.test_client() as c:
+        data=c.get('/api/539/overview').json
+        assert data['previous']=={'date':'2026-10-08','numbers':[1,3,5,7,9]}
+        assert data['latest']['date']=='2026-10-09'
+        assert data['prediction'] is None
+        login(c)
+        monkeypatch.setattr(membership,'has_access',lambda uid: True)
+        data=c.get('/api/539/overview',base_url=web.ORIGIN).json
+        assert data['prediction']['motherboard']==[11,12,13,14,15]
+        assert '已開獎' in data['status']
+        assert 'no-store' in c.get('/api/539/overview').headers['Cache-Control']

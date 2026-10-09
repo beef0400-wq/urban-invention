@@ -111,3 +111,10 @@ Owner approved new brand 甦贏 and LINE -> full mobile website, simple first la
 - LINE Flex uses smaller kilo bubbles, two sections per card, full actions on first card and lightweight home action on subsequent cards. All report text and original commands retained.
 - 56 local tests PASS; JS syntax and report preservation/escaping/number-chip smoke PASS. Startup validates 13 official LINE formats and fresh-table Postgres smoke under V25 marker; no messages sent.
 - Deployment dep-db47jpbl550s73arigo0 LIVE at 2026-10-09 05:23:28Z (Taipei 13:23:28). Startup LINE 13-format validation PASS at 05:22:34Z and fresh-table Postgres portal smoke PASS at 05:23:17Z; no messages sent. Deployed browser homepage and public 539 compact icon cards verified; homepage contains no resume/progress panel. Owner phone/authenticated visual acceptance remains pending. Previous runtime rollback 43159aa35526225ad964be5f9f0ce07a0516f3e7; preserve all DB data.
+
+## V2.6 orange and explicit 539 labels
+- Fire red/orange theme across web and LINE; live red/blue/tie semantics retained.
+- Optional panel prose collapsed under 看說明. Deeper report groups collapsed.
+- 539 overview separates previous actual draw, current target-date forecast, and current actual if available. Date identifies the draw; no fabricated official issue ID. Forecast only disclosed to an authenticated active member from immutable lock, never rebuilt on GET. Cache-Control private/no-store. Missing/unlocked status explicit.
+- LINE daily analysis also labels previous actual and current prediction dates; no algorithm changes.
+- 57 tests PASS including previous/current draw separation and member-only forecast disclosure. Deployment pending.

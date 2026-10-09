@@ -1026,8 +1026,11 @@ def format_today_companion():
             )
         number_details = "\n".join(detail_lines[:10]) if detail_lines else "本次快取尚無逐號診斷；下一次模型重建後自動補上。"
 
+        previous = next(((d,n) for d,n in load_539_draws(2) if d < today_tw()), None)
         return (
-            "【539 AI｜今日決策盤 V2】\n\n"
+            f"【539｜本期分析預測】\n日期：{today_tw().isoformat()} 期\n\n"
+            + ("上期開獎｜實際開出\n" + previous[0].isoformat() + " 期\n" + fmt_nums(previous[1]) + "\n\n" if previous else "") +
+            "本期分析預測｜母盤號碼\n"
             "🎯 今日母盤 10碼\n"
             f"{m['motherboard']}\n\n"
             "⭐ 核心5碼\n"

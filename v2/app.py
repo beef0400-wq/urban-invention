@@ -22,7 +22,7 @@ from legacy import baccarat
 from road_vision import parse_baccarat_road_image
 
 app = Flask(__name__)
-APP_VERSION = "SUYING-V2.5-CARDS-TEST"
+APP_VERSION = "SUYING-V2.6-ORANGE-TEST"
 _USER_LOCKS = {}
 _LOCK_GUARD = threading.Lock()
 

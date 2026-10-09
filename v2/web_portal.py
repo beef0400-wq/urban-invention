@@ -78,6 +78,32 @@ def install(g):
                        road=[{'莊':'紅','閒':'藍','和':'和'}.get(x,x) for x in user.get('current_road',[])],active=bool(user.get('analysis_active')),
                        favorites=state.get('favorites_539',[]),bingo_featured=bool(store.get_state(SETTINGS).get('bingo_featured')),pending=bool(state.get('pending')),campaigns=active_campaigns(),register='https://AI001.aaawin88.com',line='https://line.me/R/ti/p/@957ridwt')
 
+    @app.get('/api/539/overview')
+    def lotto_overview():
+        from legacy import lotto539 as engine
+        import verification
+        today = membership.now_tw().date()
+        draws = engine.load_539_draws(10)
+        previous = next(((d, n) for d, n in draws if d < today), None)
+        latest = draws[0] if draws else None
+        data = dict(target_date=today.isoformat(), previous=None, latest=None, prediction=None,
+                    status='本期分析尚未鎖定' if today.weekday()!=6 else '今日休市')
+        def draw_json(row):
+            return dict(date=row[0].isoformat(), numbers=sorted(row[1])) if row else None
+        data['previous'] = draw_json(previous)
+        data['latest'] = draw_json(latest)
+        token = request.cookies.get(COOKIE, '')
+        session = store.get_state(session_key(token)) if token else {}
+        if session and datetime.fromisoformat(session['expires']) > membership.now_tw() and membership.has_access(session['uid']):
+            pack = verification.locked_pack(today)
+            if pack:
+                model = json.loads(pack['note'])
+                data['prediction'] = {key: engine.parse_nums_text(model.get(key,'')) for key in ('motherboard','core5','stable2','attack3','burst4')}
+                data['status'] = '開獎前已鎖定 · 待開獎' if not latest or latest[0] < today else '本期已開獎 · 分析保留不改號'
+        response = jsonify(data)
+        response.headers['Cache-Control'] = 'private, no-store'
+        return response
+
     @app.get('/api/activities')
     def activities(): return jsonify(items=active_campaigns(),bingo_featured=bool(store.get_state(SETTINGS).get('bingo_featured')))
 

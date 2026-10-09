@@ -2,12 +2,12 @@
 import json
 import re
 
-INK='#15243B'; MUTED='#66768B'; BG='#F3F6FA'
-THEMES={'baccarat':('百家實戰','#2478B8','路單觀察 · 多訊號分析'),
-        '539':('539 好懂看盤','#087F78','每日模型 · 開獎追蹤'),
-        'bingo':('賓果看盤','#7255C6','即時資料 · 趨勢觀察'),
-        'member':('會員中心','#405A7A','一個會員 · 三種模式'),
-        'home':('甦贏','#405A7A','看數據 · 看懂再上場')}
+INK='#15243B'; MUTED='#66768B'; BG='#FFF6EF'
+THEMES={'baccarat':('百家實戰','#BC3819','路單觀察 · 多訊號分析'),
+        '539':('539 好懂看盤','#CE4D12','每日模型 · 開獎追蹤'),
+        'bingo':('賓果看盤','#A64320','即時資料 · 趨勢觀察'),
+        'member':('會員中心','#AD361A','一個會員 · 三種模式'),
+        'home':('甦贏','#AD361A','看數據 · 看懂再上場')}
 
 def txt(text,size='sm',color=INK,bold=False):
     node={'type':'text','text':str(text) or '—','size':size,'color':color,'wrap':True,'flex':0}
