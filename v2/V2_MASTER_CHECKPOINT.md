@@ -160,3 +160,9 @@ Owner approved new brand 甦贏 and LINE -> full mobile website, simple first la
 - Tutorial hub covers baccarat/539/Bingo, with dedicated instructions and interpretation guides; corresponding browser help updated.
 - 85 pytest tests PASS and node --check PASS.
 - Runtime commit 3c4ed9dfaa92c99a1bffa838744e2fff8473a6ea; deploy dep-db4beu67bikc73e70eg0 LIVE 2026-10-09T09:45:33Z. Remote health 200 V2.9, updated browser copy verified, DB preflight PASS and 17 LINE Flex types validated PASS. Native device visual acceptance remains owner review.
+
+
+## Additional administrator (2026-10-09 17:51 Taipei)
+- User explicitly requested adding the LINE identity shown in their /myid screenshot. Added it to the private OWNER_ADMIN_USER_ID list; existing owner and ADMIN_USER_IDS preserved. No raw LINE IDs committed.
+- Source supports comma-separated private owner list across router and both legacy engines. 15 admin configuration tests PASS plus three-module multiple-owner check PASS.
+- Environment-triggered deploy dep-db4bhfnlot8c738fn61g LIVE 2026-10-09T09:51:05Z. DB preflight and 17 LINE message validations PASS. New administrator can send 管理會員 or enter personal center via their own LINE link.
