@@ -22,7 +22,7 @@ from legacy import baccarat
 from road_vision import parse_baccarat_road_image
 
 app = Flask(__name__)
-APP_VERSION = "SUYING-V2.7.1-ADMIN-TEST"
+APP_VERSION = "SUYING-V2.7.2-ADMIN-LIST-TEST"
 _USER_LOCKS = {}
 _LOCK_GUARD = threading.Lock()
 
@@ -370,6 +370,7 @@ def process_event(event):
     if not user_id:
         return
     membership.ensure_user(user_id)
+    account_access.ensure(user_id)
 
     if event.get("type") == "follow":
         reply_text(reply_token, welcome_text(user_id), main_menu_items())

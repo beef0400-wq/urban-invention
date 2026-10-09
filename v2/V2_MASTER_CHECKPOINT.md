@@ -136,3 +136,9 @@ Owner approved new brand 甦贏 and LINE -> full mobile website, simple first la
 
 - Owner explicitly confirmed exact LINE identity and admin grant on 2026-10-09. Render OWNER_ADMIN_USER_ID merged successfully.
 - Deployment dep-db4aljd9fdbs73bc6rs0 LIVE at 2026-10-09T08:51:33Z; runtime commit 45118e0d7b8668ce80a3be4aed30eb02262e1aa9. Database and 13 LINE Flex preflights PASS; owner real-device admin command verification remains pending.
+
+
+## V2.7.2 Admin account list fix
+- Owner verified LINE admin command reaches management screen; list was empty because only inactive accounts were shown and message entry did not create application identities.
+- Create application account on LINE event entry; admin list includes recent trial, paid, and inactive accounts with clear status. No membership granted by viewing list.
+- Added regression coverage for first-message account creation and selecting trial/paid/free accounts. Deployment pending.

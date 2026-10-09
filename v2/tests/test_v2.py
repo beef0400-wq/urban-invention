@@ -332,3 +332,25 @@ def test_admin_button_confirmation_checks_permission_every_step(isolate,monkeypa
     monkeypatch.setattr(g,'ADMIN_USER_IDS',{'U1'});send('確認開通會員')
     expiry=membership.get_expiry('U2');assert membership.is_paid('U2')
     send('確認開通會員');assert membership.get_expiry('U2')==expiry
+
+
+def test_admin_list_includes_trial_paid_and_new_accounts(isolate,monkeypatch):
+    import account_access
+    monkeypatch.setattr(g,'ADMIN_USER_IDS',{'U1'})
+    for uid in ('Utrial','Upaid','Ufree'):
+        g.process_event(event('會員中心',uid))
+    membership.start_trial('Utrial',24)
+    membership.grant_days('Upaid',30)
+    send('管理會員')
+    text,buttons=isolate[-1]
+    for uid in ('Utrial','Upaid','Ufree','U1'):
+        code=account_access.ensure(uid)
+        assert any(command=='管理開通 '+code for _,command in buttons)
+        assert code in text
+    assert '試用中' in text and '已開通' in text and '待開通' in text
+
+
+def test_first_message_creates_application_account(isolate):
+    import account_access
+    g.process_event(event('主選單','Unew'))
+    assert any(uid=='Unew' for _,uid in account_access.recent())

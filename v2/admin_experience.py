@@ -9,8 +9,9 @@ def handle(g,text,uid,token):
     state=store.get_state(uid)
     if text=='管理會員':
         state.pop('member_action',None);store.put_state(uid,state)
-        candidates=[(u,a) for a,u in account_access.recent() if not membership.has_access(u)]
-        msg='個人中心｜管理帳號\n\n選擇甦贏帳號，再選天數並確認。\n也可輸入：管理開通 SY-帳號編號'
+        account_access.ensure(uid)
+        candidates=[(u,a) for a,u in account_access.recent()]
+        msg='個人中心｜管理帳號\n\n最近建立的帳號（包含試用中與已開通）\n選帳號 → 選天數 → 確認。\n已開通的帳號也可延長期限。\n\n'+('\n'.join(a+'｜'+account_access.profile(u)['status'] for u,a in candidates) if candidates else '目前沒有帳號；請對方先傳「會員中心」。')+'\n\n也可輸入：管理開通 SY-帳號編號'
         g.reply_text(token,msg,[(a[:20],'管理開通 '+a) for _,a in candidates]+[('主選單','主選單')]);return True
     if text.startswith('管理開通 '):
         account=text.split(maxsplit=1)[1].upper();target_uid=account_access.resolve(account);target={'line_user_id':target_uid} if target_uid else None
