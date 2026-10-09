@@ -22,7 +22,7 @@ from legacy import baccarat
 from road_vision import parse_baccarat_road_image
 
 app = Flask(__name__)
-APP_VERSION = "SUYING-V2.7-ACCOUNT-TEST"
+APP_VERSION = "SUYING-V2.7.1-ADMIN-TEST"
 _USER_LOCKS = {}
 _LOCK_GUARD = threading.Lock()
 
@@ -34,7 +34,7 @@ def user_lock(uid):
 CHANNEL_ACCESS_TOKEN = (os.getenv("CHANNEL_ACCESS_TOKEN") or os.getenv("LINE_CHANNEL_ACCESS_TOKEN") or "").strip()
 CHANNEL_SECRET = (os.getenv("CHANNEL_SECRET") or os.getenv("LINE_CHANNEL_SECRET") or "").strip()
 CRON_SECRET = os.getenv("CRON_SECRET", "").strip()
-ADMIN_USER_IDS = {x.strip() for x in os.getenv("ADMIN_USER_IDS", "").split(",") if x.strip()}
+ADMIN_USER_IDS = {x.strip() for x in (os.getenv("ADMIN_USER_IDS", "") + "," + os.getenv("OWNER_ADMIN_USER_ID", "")).split(",") if x.strip()}
 LINE_REPLY_API = "https://api.line.me/v2/bot/message/reply"
 LINE_CONTENT_API = "https://api-data.line.me/v2/bot/message"
 

@@ -23,7 +23,7 @@ CHANNEL_SECRET = os.getenv("CHANNEL_SECRET", "").strip()
 ADMIN_SECRET = os.getenv("ADMIN_SECRET", "1234").strip()
 CRON_SECRET = os.getenv("CRON_SECRET", "push8899").strip()
 DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
-ADMIN_USER_IDS = [x.strip() for x in os.getenv("ADMIN_USER_IDS", "").split(",") if x.strip()]
+ADMIN_USER_IDS = [x.strip() for x in (os.getenv("ADMIN_USER_IDS", "") + "," + os.getenv("OWNER_ADMIN_USER_ID", "")).split(",") if x.strip()]
 
 TZ_TW = timezone(timedelta(hours=8))
 HTTP = requests.Session()

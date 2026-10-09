@@ -40,7 +40,7 @@ print("🔥 LOADED", VERSION_MARKER, flush=True)
 CHANNEL_ACCESS_TOKEN = (os.getenv("CHANNEL_ACCESS_TOKEN") or os.getenv("LINE_CHANNEL_ACCESS_TOKEN") or "").strip()
 CHANNEL_SECRET = (os.getenv("CHANNEL_SECRET") or os.getenv("LINE_CHANNEL_SECRET") or "").strip()
 DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
-ADMIN_USER_IDS = [x.strip() for x in os.getenv("ADMIN_USER_IDS", "").split(",") if x.strip()]
+ADMIN_USER_IDS = [x.strip() for x in (os.getenv("ADMIN_USER_IDS", "") + "," + os.getenv("OWNER_ADMIN_USER_ID", "")).split(",") if x.strip()]
 
 LINE_REPLY_API = "https://api.line.me/v2/bot/message/reply"
 TZ_TW = timezone(timedelta(hours=8))

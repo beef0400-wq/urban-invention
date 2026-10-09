@@ -125,3 +125,11 @@ Owner approved new brand 甦贏 and LINE -> full mobile website, simple first la
 - Admin account activation uses SY identity only, 3/7/30 days and confirmation. Web role/CSRF required, per-target lock and request dedup with parameter mismatch rejection. Native LINE management also resolves SY accounts. No guessed admin role granted.
 - Existing membership durations and personal history retained; expired trial identified as expired in personal center.
 - 59 local tests PASS. Startup V27 synthetic Postgres smoke checks independent account creation/cleanup. Deployment dep-db484l7lot8c73859s30 LIVE at 2026-10-09 05:59:21Z. Postgres V27 smoke PASS at 05:59:14Z and 13 official LINE format validations PASS at 05:58:31Z. Browser confirms external registration removed and 個人中心 header shown. Owner phone/account/admin acceptance remains pending; no real account grants performed.
+
+
+## 2026-10-09 Owner admin access V2.7.1
+- Owner provided LINE /myid screenshot; add verified identity through private Render OWNER_ADMIN_USER_ID (do not commit identity).
+- Main app and both legacy modules merge OWNER_ADMIN_USER_ID with existing ADMIN_USER_IDS, preserving previous administrators.
+- LINE and web admin checks use the merged allowlist; unrelated users remain denied.
+- Local regression: 74 passed including 15 admin configuration cases.
+- Deployment and owner real-device verification pending at commit time.
