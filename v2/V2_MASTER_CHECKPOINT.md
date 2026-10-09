@@ -151,3 +151,11 @@ Owner approved new brand 甦贏 and LINE -> full mobile website, simple first la
 - Browser open-page expiry reminder polls locally every 15 seconds and refreshes server status; LINE reminds on next operation. No unsolicited scheduled LINE push configured.
 - Verification: 80 pytest tests pass; node --check passes. Includes auth/CSRF, cross-user collision, manual grant, one-hour expiry and mode guards.
 - Runtime commit 65a8918c85880a226349e35a739604e8b997dbed; deploy dep-db4b6k59fdbs73bdncc0 LIVE 2026-10-09T09:27:52Z. Database preflight and 13 LINE message validations PASS.
+
+
+## V2.9 compact cards and tutorials (2026-10-09)
+- Screenshot requests: one mega-size LINE home bubble, wrapped clickable text tiles instead of truncated button labels; no duplicated quick-reply home menu. Red/blue/draw round buttons stay native buttons.
+- 539 default card keeps previous actual draw, current forecast motherboard/core and 2/3/4 combinations. Model description/structure, per-number diagnostics and recent records moved to separate actions. Same locked model data; detail reads do not record new forecasts or regenerate numbers.
+- Recent public records default to 5 periods with separate forecast/actual labels. Full 5-period audit via separate button. Personal history limited to 5 calendar days and 5 entries, Taiwan time. Older stored data preserved.
+- Tutorial hub covers baccarat/539/Bingo, with dedicated instructions and interpretation guides; corresponding browser help updated.
+- 85 pytest tests PASS and node --check PASS; deployment pending.

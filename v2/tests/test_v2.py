@@ -389,3 +389,46 @@ def test_binding_cancel_and_invalid(isolate):
     send('綁定帳號');send('<script>');assert '4～20' in isolate[-1][0]
     send('cancel_123');send('取消綁定');send('確認綁定')
     assert account_access.profile('U1')['username'] is None
+
+def test_539_default_hides_details_and_preserves_locked_numbers(isolate,monkeypatch):
+    d=date(2026,10,9);saved=pack(d)
+    model=json.loads(saved['note']);model.update(core5='01 02 03 04 05',diagnostics={'1':{'score':80,'freq30':5,'gap':3,'tags':['短期熱']}},pattern_note='模型規則說明')
+    saved['note']=json.dumps(model)
+    monkeypatch.setattr(lo,'today_tw',lambda:d)
+    monkeypatch.setattr(lo,'get_or_build_today_pick_539',lambda:saved)
+    monkeypatch.setattr(lo,'load_539_draws',lambda *a,**k:[(d-timedelta(days=1),[11,12,13,14,15])])
+    paid();send('539 AI');send('今日陪跑')
+    text,buttons=isolate[-1]
+    assert '上期開獎｜實際開出' in text and '本期分析預測' in text
+    assert model['motherboard'] in text and model['stable2'] in text
+    assert all(x not in text for x in ('逐號依據','模型規則說明','驗證碼','公開驗證'))
+    assert ('看完整資訊','539完整資訊') in buttons
+    before=len(store.history('U1'))
+    send('539逐號依據');assert '近30期：5次' in isolate[-1][0]
+    send('539完整資訊');assert '模型規則說明' in isolate[-1][0]
+    assert len(store.history('U1'))==before
+    assert json.loads(saved['note'])==model
+
+def test_tutorials_cover_all_modes_without_access(isolate):
+    send('百家 AI');send('使用教學')
+    text,buttons=isolate[-1]
+    assert all(x in text for x in ('百家','539','賓果'))
+    for command,expected in [('教學百家','訊號指數'),('教學539','上期開獎'),('教學賓果','冷號')]:
+        assert command in [b for a,b in buttons]
+        send(command);assert expected in isolate[-1][0]
+
+def test_personal_history_recent_five_days_and_five_entries(isolate):
+    old=(membership.now_tw()-timedelta(days=10)).isoformat()
+    with store.cursor(True) as c:c.execute('INSERT INTO v2_records VALUES (%s,%s,%s,%s,%s)',('oldrecord','U1','539',old,json.dumps({'kind':'舊紀錄'})))
+    for i in range(8):store.record('U1','539',{'kind':'新紀錄'+str(i)})
+    send('我的紀錄');text=isolate[-1][0]
+    assert '舊紀錄' not in text and text.count('新紀錄')==5
+
+def test_verification_compact_keeps_only_five_periods():
+    for i in range(8):
+        d=date(2026,10,9)-timedelta(days=i)
+        with store.cursor(True) as c:c.execute('INSERT INTO v2_public_539(target_date,locked_at,digest,payload,actual) VALUES (%s,%s,%s,%s,%s)',(d.isoformat(),'2026-10-09T10:00:00+08:00','abc123',json.dumps(pack(d)),json.dumps([30,31,32,33,34])))
+    text=verification.report(5,compact=True)
+    assert text.count('事前分析｜母盤')==5 and text.count('實際開獎')==6
+    assert '驗證碼' not in text and '2026-10-02' not in text
+    assert '中獎組合' in verification.report(5)

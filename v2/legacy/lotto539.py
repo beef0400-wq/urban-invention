@@ -995,72 +995,41 @@ def latest_model_result_text():
     import verification
     return '\n'+verification.report(7)+'\n'
 
-def format_today_companion():
+def format_today_companion(view='summary'):
     try:
         pack = get_or_build_today_pick_539()
-        m = parse_models_from_note(pack["note"])
-        result_text = latest_model_result_text()
-        stale_note = ""
-        if not m.get("data_fresh", True):
-            stale_note = (
-                "\n⚠️ 資料提醒\n"
-                f"最新資料：{m.get('latest_draw_date', '無')}｜距今約 {m.get('data_stale_days', '未知')} 天\n"
-            )
-
-        diag = m.get("diagnostics") or {}
-        mother = parse_nums_text(m.get("motherboard", ""))
-        if not m.get("core5"):
-            ranked = sorted(mother, key=lambda n: (diag.get(str(n), {}).get("score", 0), -n), reverse=True)
-            m["core5"] = fmt_nums(ranked[:5] or mother[:5])
-        if not m.get("top3"):
-            m["top3"] = fmt_nums(parse_nums_text(m["core5"])[:3])
-
-        detail_lines = []
-        for n in sorted(mother, key=lambda x: diag.get(str(x), {}).get("score", 0), reverse=True):
-            d = diag.get(str(n), {})
-            if not d:
-                continue
-            tags = "・".join(d.get("tags") or []) or "均衡"
-            detail_lines.append(
-                f"{n:02d}｜{d.get('score',0):>3}分｜30期{d.get('freq30',0)}次｜遺漏{d.get('gap',0)}期｜{tags}"
-            )
-        number_details = "\n".join(detail_lines[:10]) if detail_lines else "本次快取尚無逐號診斷；下一次模型重建後自動補上。"
-
-        previous = next(((d,n) for d,n in load_539_draws(2) if d < today_tw()), None)
-        return (
-            f"【539｜本期分析預測】\n日期：{today_tw().isoformat()} 期\n\n"
-            + ("上期開獎｜實際開出\n" + previous[0].isoformat() + " 期\n" + fmt_nums(previous[1]) + "\n\n" if previous else "") +
-            "本期分析預測｜母盤號碼\n"
-            "🎯 今日母盤 10碼\n"
-            f"{m['motherboard']}\n\n"
-            "⭐ 核心5碼\n"
-            f"{m.get('core5','—')}\n"
-            f"🔥 AI熱度 Top3｜{m.get('top3','—')}\n\n"
-            "━━━━━━━━━━━━━━━\n"
-            "2星主軸（3碼）\n"
-            f"{m['stable2']}\n"
-            "3星主攻（6碼）\n"
-            f"{m['attack3']}\n"
-            "4星延伸（7碼）\n"
-            f"{m['burst4']}\n\n"
-            "━━━━━━━━━━━━━━━\n"
-            "📊 母盤逐號依據\n"
-            f"{number_details}\n\n"
-            "━━━━━━━━━━━━━━━\n"
-            "🧩 結構\n"
-            f"{structure_539(m['motherboard'])}\n"
-            f"活躍區段：{pack['hot_zone']}\n"
-            f"冷號／遺漏補位：{m.get('cold_note', '無')}\n"
-            f"模型狀態：{'回補修正' if m.get('model_mode') == 'recovery' else '一般縮盤'}\n"
-            f"{result_text}"
-            f"{stale_note}\n"
-            "📌 模型說明\n"
-            f"{m.get('pattern_note', '')}\n\n"
-            "所有數字為歷史資料模型輸出，開獎結果仍屬未知；開獎後系統會保留結果供追蹤。"
-        )
+        m = parse_models_from_note(pack['note'])
+        diag=m.get('diagnostics') or {};mother=parse_nums_text(m['motherboard'])
+        if not m.get('core5'):
+            ranked=sorted(mother,key=lambda n:(diag.get(str(n),{}).get('score',0),-n),reverse=True)
+            m['core5']=fmt_nums(ranked[:5] or mother[:5])
+        m.setdefault('top3',fmt_nums(parse_nums_text(m['core5'])[:3]))
+        if view=='basis':
+            lines=['539｜母盤逐號依據','日期：'+today_tw().isoformat()+' 期','分數是模型排序，不是開獎機率。']
+            for n in sorted(mother,key=lambda n:diag.get(str(n),{}).get('score',0),reverse=True):
+                d=diag.get(str(n),{})
+                if not d:continue
+                lines.append(f"\n{n:02d}｜{d.get('score',0)}分\n近30期：{d.get('freq30',0)}次｜遺漏：{d.get('gap',0)}期\n"+'・'.join(d.get('tags') or ['均衡']))
+            if len(lines)==3:lines.append('此期快取尚無逐號診斷，保留原分析，不重建號碼。')
+            return '\n'.join(lines)
+        if view=='full':
+            return ('539｜完整資訊\n日期：'+today_tw().isoformat()+' 期\n\n🧩 號碼結構\n'+structure_539(m['motherboard'])+
+                    '\n活躍區段：'+pack['hot_zone']+'\n冷號／遺漏補位：'+m.get('cold_note','無')+
+                    '\n模型狀態：'+('回補修正' if m.get('model_mode')=='recovery' else '一般縮盤')+
+                    '\n歷史資料截至：'+str(m.get('latest_draw_date','未提供'))+'\n資料狀態：'+('已更新' if m.get('data_fresh',True) else '尚未更新')+
+                    '\n\n📌 模型說明\n'+m.get('pattern_note','尚無補充說明')+
+                    '\n\n分析根據歷史開獎資料；模型分數不等於下一期開獎機率。')
+        previous=next(((d,n) for d,n in load_539_draws(2) if d<today_tw()),None)
+        text=('539｜本期分析預測\n日期：'+today_tw().isoformat()+' 期\n'+
+              ('上期開獎｜實際開出 '+previous[0].isoformat()+'\n'+fmt_nums(previous[1]) if previous else '上期開獎｜資料暫缺')+
+              '\n\n本期分析預測｜母盤10碼\n'+m['motherboard']+'\n核心5碼\n'+m['core5']+
+              '\n\n2星主軸（3碼）\n'+m['stable2']+'\n3星主攻（6碼）\n'+m['attack3']+'\n4星延伸（7碼）\n'+m['burst4'])
+        if not m.get('data_fresh',True):text+='\n⚠️ 歷史資料尚未更新，請查看完整資訊。'
+        return text
     except Exception as e:
-        log("FORMAT_539_ERROR:", repr(e))
-        return "【539 AI】\n\n目前無法完成今日模型，請稍後重試；系統不會用假資料冒充今日分析。"
+        log('FORMAT_539_ERROR:',repr(e))
+        return '【539 AI】\n\n目前無法完成今日模型，請稍後重試；系統不會用假資料冒充今日分析。'
+
 
 def format_539_push():
     return format_today_companion().replace("【539 AI｜今日決策盤 V2】", "【AI理性陪跑｜539 今日決策盤】")

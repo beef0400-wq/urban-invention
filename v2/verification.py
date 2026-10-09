@@ -42,10 +42,20 @@ def reconcile(draws):
         count+=1
     return count
 
-def report(limit=7):
-    limit=limit if limit in (7,30,90) else 7
+def report(limit=5, compact=False):
+    limit=limit if limit in (5,7,30,90) else 5
     with store.cursor() as c:
         c.execute('SELECT target_date,locked_at,digest,payload,actual FROM v2_public_539 ORDER BY target_date DESC LIMIT %s',(limit,));rows=c.fetchall()
+    if compact:
+        lines=[f'539｜最近{limit}期紀錄','本期分析與實際開獎分開標示。']
+        for d,at,digest,p,a in rows:
+            m=json.loads(json.loads(p)['note'])
+            lines.append(f'\n{d} 期\n事前分析｜母盤\n'+m['motherboard'])
+            if a is None:lines.append('實際開獎｜待開獎／待資料更新')
+            else:
+                actual=set(json.loads(a));hits=len(set(engine.parse_nums_text(m['motherboard']))&actual)
+                lines.append('實際開獎\n'+engine.fmt_nums(actual)+f'\n母盤命中：{hits}顆')
+        return '\n'.join(lines if rows else lines+['尚無事前分析紀錄。'])
     lines=[f'539 公開驗證｜最近 {limit} 期','只列開獎前鎖定分析；成功、失敗與待開獎均保留。']
     for d,at,digest,p,a in rows:
         m=json.loads(json.loads(p)['note']); lines.append(f'\n{d}｜鎖定 {at}\n母盤 {m["motherboard"]}\n驗證碼 {digest[:12]}')

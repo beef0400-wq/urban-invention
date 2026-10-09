@@ -34,6 +34,11 @@ def button(label,value,color,primary=False):
             **({'color':color} if primary else {}),
             'action':action(label,value),'flex':1}
 
+def menu_tile(label,value,color,primary=False):
+    return {'type':'box','layout':'vertical','flex':1,'paddingAll':'12px','cornerRadius':'8px',
+            'backgroundColor':color if primary else '#E4E7EC','action':action(label,value),
+            'contents':[dict(txt(public_text(label),'sm','#FFFFFF' if primary else INK,True),align='center')]}
+
 def footer(items,color):
     rows=[]
     items=list(dict.fromkeys(tuple(x) for x in (items or [])))[:13]
@@ -45,7 +50,7 @@ def footer(items,color):
         items=[x for x in items if x not in results]
     for i in range(0,len(items),2):
         rows.append({'type':'box','layout':'horizontal','spacing':'sm',
-                     'contents':[button(a,b,color,i==0 and j==0 and not results) for j,(a,b) in enumerate(items[i:i+2])]})
+                     'contents':[menu_tile(a,b,color,i==0 and j==0 and not results) for j,(a,b) in enumerate(items[i:i+2])]})
     return {'type':'box','layout':'vertical','spacing':'sm','paddingAll':'16px','contents':rows or [txt('可直接輸入指令','xs',MUTED)]}
 
 def section(lines,color):
@@ -88,7 +93,7 @@ def sections(text):
 
 def bubble(key,title,groups,items,page,total):
     name,color,subtitle=THEMES[key]
-    return {'type':'bubble','size':'kilo',
+    return {'type':'bubble','size':'mega',
             'header':{'type':'box','layout':'vertical','paddingAll':'14px','spacing':'sm','backgroundColor':INK,
                       'contents':[txt(name,'xs','#AABBD0',True),txt(title,'lg','#FFFFFF',True),
                                   txt(subtitle+ (f' · {page}/{total}' if total>1 else ''),'xs','#CBD5E1')]},
@@ -109,7 +114,7 @@ def build_messages(text,quick_items=None):
         title='今天想看哪個模式？';key='home'
         groups=[['百家實戰','傳路單 → 核對 → 即時分析'],['539 好懂看盤','每日母盤、核心號碼與開獎驗證'],['賓果看盤','近20／50／100期的真實資料統計'],
                 [line for line in raw.splitlines() if line.startswith('目前：')]]
-    pages=[groups[i:i+2] for i in range(0,len(groups),2)]
+    pages=[groups] if raw.startswith('🎲 甦贏') or raw.startswith('甦贏｜三種模式') else [groups[i:i+2] for i in range(0,len(groups),2)]
     bubbles=[bubble(key,title,g,quick_items if i==0 else [('主選單','主選單')],i+1,len(pages)) for i,g in enumerate(pages)]
     messages=[]
     for i in range(0,len(bubbles),4):
@@ -119,6 +124,6 @@ def build_messages(text,quick_items=None):
     # Oversized content retains the existing text transport rather than losing detail.
     if len(messages)>5 or any(len(json.dumps(m,ensure_ascii=False).encode())>48000 for m in messages):
         messages=[{'type':'text','text':raw[i:i+4800]} for i in range(0,len(raw),4800)][:5]
-    if quick_items:
+    if quick_items and not raw.startswith('🎲 甦贏'):
         messages[-1]['quickReply']={'items':[{'type':'action','action':action(a,b)} for a,b in quick_items[:13]]}
     return messages

@@ -36,3 +36,14 @@ def test_round_buttons_keep_internal_commands_and_show_public_names():
     messages=build_messages(*CASES[1]);buttons=[n for n in walk(messages) if n.get('type')=='button']
     assert [n['action']['text'] for n in buttons[:3]]==['莊','閒','和']
     assert [n['action']['label'] for n in buttons[:3]]==['🔴紅','🔵藍','🟢和']
+
+def test_home_is_one_wide_card_and_labels_wrap():
+    from app import main_menu_items
+    messages=build_messages('🎲 甦贏\n\n目前：免費會員',main_menu_items())
+    assert len(messages)==1 and messages[0]['contents']['type']=='bubble'
+    assert messages[0]['contents']['size']=='mega'
+    assert 'quickReply' not in messages[0]
+    tiles=[n for n in walk(messages) if n.get('type')=='box' and n.get('action',{}).get('type')=='message']
+    assert set(n['action']['text'] for n in tiles)==set(b for a,b in main_menu_items())
+    tile=next(n for n in tiles if n['action']['text']=='539 AI')
+    assert tile['contents'][0]['text']=='539 好懂看盤' and tile['contents'][0]['wrap']

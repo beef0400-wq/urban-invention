@@ -22,7 +22,7 @@ from legacy import baccarat
 from road_vision import parse_baccarat_road_image
 
 app = Flask(__name__)
-APP_VERSION = "SUYING-V2.8-BIND-TRIAL-TEST"
+APP_VERSION = "SUYING-V2.9-COMPACT-UI-TEST"
 _USER_LOCKS = {}
 _LOCK_GUARD = threading.Lock()
 
@@ -296,14 +296,16 @@ def _handle_global_text(event, text, user_id, reply_token):
             reply_text(reply_token, "免費試用無法再次開啟。請綁定帳號後回小幫手驗證開通。\n\n" + membership.status_text(user_id), main_menu_items())
         return True
 
-    if normalized == "使用教學":
-        mode = membership.get_mode(user_id)
-        if mode == "baccarat":
-            reply_text(reply_token, "百家 AI：\n1. 進桌後截完整路單\n2. 直接把截圖傳給 LINE\n3. 確認辨識預覽\n4. 之後每局只按一次紅／藍／和\n5. 想看模型細節再按詳細分析", mode_menu(mode))
-        elif mode == "bingo":
-            reply_text(reply_token, "Bingo AI：選即時盤查看近20／50／100期真實資料統計。抓不到真實資料時系統不會造資料。", mode_menu(mode))
+    if normalized in {'使用教學','教學百家','教學539','教學賓果'}:
+        guides={
+            '教學百家': '百家實戰｜操作教學\n\n① 進桌後傳完整路單截圖，或手動輸入。\n② 核對紅／藍／和，按「確認開始」。\n③ 每局開出後只按一次紅／藍／和。\n④ 記錯按「撤回上一筆」；漏記按「補漏／修正」。\n\n怎麼看分析？\n先看本輪觀察、訊號指數與風險；想看每項理由再按「詳細分析」。分數是規則訊號，不是勝率。\n換桌時重新帶入目前路單。',
+            '教學539':'539｜操作教學\n\n① 點「今日分析」查看本期號碼。\n②「上期開獎」是已開出的5個號碼；「本期分析預測」才是這次的分析。\n③ 母盤10碼是主要觀察範圍，核心5碼是其中較優先的號碼。\n④ 2星／3星／4星分別顯示3／6／7碼範圍，組合以該範圍選2／3／4碼；並非每組都會命中。\n\n想知道怎麼選？\n按「母盤逐號依據」看次數、遺漏與模型分數；按「看完整資訊」看結構與說明。\n「最近5期紀錄」可看過去分析與開獎結果。分析分數不等於開獎機率。',
+            '教學賓果':'賓果｜操作教學\n\n① 點「即時盤」看最新資料。\n② 選20期看短線、50期看中段、100期看較長區間。\n③ 看資料時間，先確認資料是否更新。\n\n怎麼看內容？\n熱號：所選區間出現較多；冷號：出現較少。區段與尾數顯示分布，並非下一期必然開出。\n資料太舊或抓取失敗會暫停分析，稍後再查。'}
+        if normalized=='使用教學':
+            reply_text(reply_token,'甦贏｜三種模式怎麼操作\n\n百家實戰\n傳路單 → 核對 → 每局按紅／藍／和。\n\n539 好懂看盤\n分清上期開獎與本期分析，先看號碼，再點開依據。\n\n賓果看盤\n選20／50／100期，查看熱冷號與分布。',[('百家操作教學','教學百家'),('539操作教學','教學539'),('賓果操作教學','教學賓果'),('主選單','主選單')])
         else:
-            reply_text(reply_token, "539 AI：查看今日模型、母盤與2／3／4星；開獎後再看母盤追蹤驗證。", mode_menu(mode))
+            target={'教學百家':'百家 AI','教學539':'539 AI','教學賓果':'Bingo AI'}[normalized]
+            reply_text(reply_token,guides[normalized],[('開始操作',target),('返回教學','使用教學'),('主選單','主選單')])
         return True
 
     if normalized == "傳路單截圖":

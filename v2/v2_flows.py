@@ -61,26 +61,29 @@ def bingo_board(window=None):
 def handle(g,event,text,uid,token):
     # Global commands always precede pending flows.
     if text in ('我的紀錄','分析紀錄'):
-        rows=store.history(uid)
-        msg='我的紀錄｜三模式共用\n'+'\n'.join(f'{r["at"][:19]}｜{r["mode"]}｜{r["data"].get("kind","分析")}' for r in rows)
+        rows=[r for r in store.history(uid,100) if datetime.fromisoformat(r['at']).astimezone(membership.TZ_TW).date()>=(membership.now_tw()-timedelta(days=4)).date()][:5]
+        msg='我的紀錄｜最近5天（最多5筆）\n'+'\n'.join(f'{datetime.fromisoformat(r['at']).astimezone(membership.TZ_TW).strftime('%m/%d %H:%M')}｜{r["mode"]}｜{r["data"].get("kind","分析")}' for r in rows)
         g.reply_text(token,msg if rows else '尚無個人分析紀錄。',g.main_menu_items());return True
-    if text in ('公開驗證','母盤追蹤','驗證7','驗證30','驗證90'):
-        g.reply_text(token,verification.report(int(text[2:]) if text.startswith('驗證') else 7),[('近7期','驗證7'),('近30期','驗證30'),('近90期','驗證90'),('主選單','主選單')]);return True
+    if text in ('公開驗證','母盤追蹤','驗證5','539完整紀錄','驗證7','驗證30','驗證90'):
+        g.reply_text(token,verification.report(int(text[2:]) if text.startswith('驗證') else 5,compact=text in ('公開驗證','母盤追蹤','驗證5')),[('看完整紀錄','539完整紀錄'),('返回本期分析','今日陪跑'),('主選單','主選單')]);return True
     if text=='今日追蹤':
-        g.reply_text(token,verification.today_report(),[('近7期','驗證7'),('近30期','驗證30'),('主選單','主選單')]);return True
+        g.reply_text(token,verification.today_report(),[('最近5期紀錄','驗證5'),('主選單','主選單')]);return True
+    if text in ('539完整資訊','539逐號依據'):membership.set_mode(uid,'539')
     if text=='繼續本桌':membership.set_mode(uid,'baccarat')
     mode=membership.get_mode(uid)
     is_bingo=text in ('即時盤','Bingo分析','賓果分析','20期','50期','100期','1期','5期','10期','賓果1期分析','賓果5期分析','賓果10期分析')
     batch=parse_batch(text) if mode=='baccarat' else None
-    handled=is_bingo or (mode=='539' and text in ('今日陪跑','今日分析','今日 AI 分析')) or (mode=='baccarat' and (batch is not None or text in ('匯入牌路','確認開始','完成匯入','撤回匯入','清空匯入','修正牌路','匯入莊','匯入閒','匯入和','繼續本桌','修正本桌','撤回上一筆','更新本桌','換新桌','取消更新','確認修正') or text.startswith(('修正 ','刪除 ','追加 ','牌路','快速牌路'))))
+    handled=is_bingo or (mode=='539' and text in ('今日陪跑','今日分析','今日 AI 分析','539完整資訊','539逐號依據')) or (mode=='baccarat' and (batch is not None or text in ('匯入牌路','確認開始','完成匯入','撤回匯入','清空匯入','修正牌路','匯入莊','匯入閒','匯入和','繼續本桌','修正本桌','撤回上一筆','更新本桌','換新桌','取消更新','確認修正') or text.startswith(('修正 ','刪除 ','追加 ','牌路','快速牌路'))))
     if not handled:return False
     if not membership.has_access(uid):g.reply_text(token,account_access.access_notice(uid),account_access.trial_buttons(uid)+[('綁定帳號','綁定帳號'),('會員中心','會員中心')]);return True
     if is_bingo:
         membership.set_mode(uid,'bingo');msg=bingo_board(int(text[:-1]) if text in ('20期','50期','100期') else None);store.record(uid,'bingo',{'kind':'即時盤','text':msg});g.reply_text(token,msg,g.mode_menu('bingo'));return True
     if mode=='539':
-        msg=lo.format_today_companion()
-        if '今日決策盤' in msg:msg=msg.replace('】\n\n','】\n\n目前觀察：先看母盤與核心號碼，再核對下方逐號依據。\n主要依據：歷史開獎次數、遺漏與結構等模型規則。\n訊號限制：模型分數不是下期開獎機率；結果以今日追蹤對帳。\n\n',1)
-        store.record(uid,'539',{'kind':'今日分析','text':msg});g.reply_text(token,msg,g.mode_menu('539'));return True
+        view={'539完整資訊':'full','539逐號依據':'basis'}.get(text,'summary')
+        msg=lo.format_today_companion(view)
+        if view=='summary':store.record(uid,'539',{'kind':'今日分析','text':msg})
+        items=[('看完整資訊','539完整資訊'),('母盤逐號依據','539逐號依據'),('最近5期紀錄','驗證5'),('539操作教學','教學539'),('主選單','主選單')] if view=='summary' else [('返回本期分析','今日陪跑'),('主選單','主選單')]
+        g.reply_text(token,msg,items);return True
     state=store.get_state(uid);p=state.get('pending');seq=list(p['sequence']) if p else []
     user=ba.get_user(uid) or {}
     if text=='繼續本桌':
