@@ -87,7 +87,7 @@ def install(g):
         previous = next(((d, n) for d, n in draws if d < today), None)
         latest = draws[0] if draws else None
         data = dict(target_date=today.isoformat(), previous=None, latest=None, prediction=None,
-                    status='本期分析尚未鎖定' if today.weekday()!=6 else '今日休市')
+                    status='登入會員／試用後查看' if today.weekday()!=6 else '今日休市')
         def draw_json(row):
             return dict(date=row[0].isoformat(), numbers=sorted(row[1])) if row else None
         data['previous'] = draw_json(previous)
@@ -96,6 +96,7 @@ def install(g):
         session = store.get_state(session_key(token)) if token else {}
         if session and datetime.fromisoformat(session['expires']) > membership.now_tw() and membership.has_access(session['uid']):
             pack = verification.locked_pack(today)
+            data['status'] = '本期分析尚未鎖定' if today.weekday()!=6 else '今日休市'
             if pack:
                 model = json.loads(pack['note'])
                 data['prediction'] = {key: engine.parse_nums_text(model.get(key,'')) for key in ('motherboard','core5','stable2','attack3','burst4')}
