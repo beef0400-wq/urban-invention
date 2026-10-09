@@ -66,3 +66,14 @@ def undo(uid):
     user=ba.update_user(uid,**old);state.pop('pending',None);state['road']=user.get('current_road') or [];store.put_state(uid,state)
     store.record(uid,'baccarat',{'kind':'撤回上一筆','sequence':state['road']})
     return '已撤回上一筆更新。\n\n'+ba.decision_card(user,ba.analyze_v15(user))
+
+def clear_live_table(uid):
+    """Start a fresh viewing session; keep membership and historical records."""
+    ba.ensure_user(uid)
+    ba.update_user(uid,current_road=[],analysis_active=False,imported_ready=False,
+                   pending_flow=None,pending_main_result=None,last_prediction=None,
+                   tie_count=0,high_count=0,low_count=0,banker_pair_count=0,player_pair_count=0,
+                   round_win=0,round_loss=0,win_streak=0,loss_streak=0,max_win_streak=0,max_loss_streak=0)
+    state=store.get_state(uid)
+    for key in ('road','pending','undo'):state.pop(key,None)
+    store.put_state(uid,state)

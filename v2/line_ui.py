@@ -88,11 +88,11 @@ def sections(text):
 
 def bubble(key,title,groups,items,page,total):
     name,color,subtitle=THEMES[key]
-    return {'type':'bubble','size':'mega',
-            'header':{'type':'box','layout':'vertical','paddingAll':'20px','spacing':'sm','backgroundColor':INK,
-                      'contents':[txt(name,'xs','#AABBD0',True),txt(title,'xl','#FFFFFF',True),
+    return {'type':'bubble','size':'kilo',
+            'header':{'type':'box','layout':'vertical','paddingAll':'14px','spacing':'sm','backgroundColor':INK,
+                      'contents':[txt(name,'xs','#AABBD0',True),txt(title,'lg','#FFFFFF',True),
                                   txt(subtitle+ (f' · {page}/{total}' if total>1 else ''),'xs','#CBD5E1')]},
-            'body':{'type':'box','layout':'vertical','spacing':'md','paddingAll':'16px','backgroundColor':BG,
+            'body':{'type':'box','layout':'vertical','spacing':'md','paddingAll':'12px','backgroundColor':BG,
                     'contents':[section(g,color) for g in groups]},
             'footer':footer(items,color)}
 
@@ -105,13 +105,12 @@ def build_messages(text,quick_items=None):
     groups=sections(raw)
     if groups and groups[0] and groups[0][0]==first and len(groups[0])==1:groups=groups[1:] or [['選一個功能開始。']]
     # A visible native menu replaces the horizontally hidden quick-reply-only menu.
-    if raw.startswith('🎲 AI 理性陪跑') and '目前進度' not in raw:
+    if raw.startswith('🎲 甦贏'):
         title='今天想看哪個模式？';key='home'
-        groups=[['百家 AI','傳路單 → 核對 → 即時分析'],['539 AI','每日母盤、核心號碼與開獎驗證'],['Bingo AI','近20／50／100期的真實資料統計'],
+        groups=[['百家實戰','傳路單 → 核對 → 即時分析'],['539 好懂看盤','每日母盤、核心號碼與開獎驗證'],['賓果看盤','近20／50／100期的真實資料統計'],
                 [line for line in raw.splitlines() if line.startswith('目前：')]]
-    pages=[groups[i:i+3] for i in range(0,len(groups),3)]
-    if key=='home' and title=='今天想看哪個模式？':pages=[groups]
-    bubbles=[bubble(key,title,g,quick_items,i+1,len(pages)) for i,g in enumerate(pages)]
+    pages=[groups[i:i+2] for i in range(0,len(groups),2)]
+    bubbles=[bubble(key,title,g,quick_items if i==0 else [('主選單','主選單')],i+1,len(pages)) for i,g in enumerate(pages)]
     messages=[]
     for i in range(0,len(bubbles),4):
         group=bubbles[i:i+4]

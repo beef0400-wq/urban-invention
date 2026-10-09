@@ -14,7 +14,7 @@ COOKIE = 'suying_session'
 CAMPAIGNS = '__suying_campaigns__'
 DRAFTS = '__suying_campaign_drafts__'
 SETTINGS = '__suying_home_settings__'
-COMMANDS = {'主選單','百家 AI','539 AI','Bingo AI','今日陪跑','今日追蹤','驗證7','驗證30','驗證90','即時盤','20期','50期','100期','會員中心','免費體驗','我的紀錄','使用教學','繼續本桌','詳細分析','撤回上一筆','修正本桌','確認修正','取消更新','更新本桌','換新桌','結束分析','匯入牌路','匯入莊','匯入閒','匯入和','撤回匯入','清空匯入','確認開始','完成匯入','修正牌路','莊','閒','和','紅','藍','綁定帳號','查看待確認牌路'}
+COMMANDS = {'主選單','百家 AI','539 AI','Bingo AI','今日陪跑','今日追蹤','驗證7','驗證30','驗證90','即時盤','20期','50期','100期','會員中心','免費體驗','我的紀錄','使用教學','繼續本桌','詳細分析','撤回上一筆','修正本桌','確認修正','取消更新','更新本桌','換新桌','結束分析','匯入牌路','匯入莊','匯入閒','匯入和','撤回匯入','清空匯入','確認開始','完成匯入','修正牌路','莊','閒','和','紅','藍','綁定帳號','查看待確認牌路','開始新桌'}
 
 def hashed(token): return hashlib.sha256(token.encode()).hexdigest()
 def session_key(token): return 'web:session:'+hashed(token)
@@ -76,7 +76,7 @@ def install(g):
         user=ba.get_user(uid) or {};state=store.get_state(uid)
         return jsonify(csrf=data['csrf'],member=membership.status_text(uid),access=membership.has_access(uid),admin=uid in g.ADMIN_USER_IDS,
                        road=[{'莊':'紅','閒':'藍','和':'和'}.get(x,x) for x in user.get('current_road',[])],active=bool(user.get('analysis_active')),
-                       favorites=state.get('favorites_539',[]),bingo_featured=bool(store.get_state(SETTINGS).get('bingo_featured')),pending=bool(state.get('pending')),progress=line_ui.public_text(experience.home_progress(uid)),campaigns=active_campaigns(),register='https://AI001.aaawin88.com',line='https://line.me/R/ti/p/@957ridwt')
+                       favorites=state.get('favorites_539',[]),bingo_featured=bool(store.get_state(SETTINGS).get('bingo_featured')),pending=bool(state.get('pending')),campaigns=active_campaigns(),register='https://AI001.aaawin88.com',line='https://line.me/R/ti/p/@957ridwt')
 
     @app.get('/api/activities')
     def activities(): return jsonify(items=active_campaigns(),bingo_featured=bool(store.get_state(SETTINGS).get('bingo_featured')))
@@ -112,6 +112,11 @@ def install(g):
             if cmd.startswith('綁定 '):membership.set_mode(uid,'baccarat')
             elif mode in ('baccarat','539','bingo'):membership.set_mode(uid,mode)
             if membership.get_mode(uid)=='baccarat':ba.ensure_user(uid)
+            if cmd=='開始新桌':
+                experience.clear_live_table(uid)
+                out={'replies':[{'text':'百家實戰｜傳目前路單，核對後開始。','buttons':[]}]}
+                store.put_state(key,out)
+                return jsonify(out)
             if cmd=='查看待確認牌路':
                 p=store.get_state(uid).get('pending')
                 if not p:return jsonify(replies=[{'text':'目前没有待確認牌路。','buttons':[]}])

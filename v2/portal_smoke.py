@@ -5,7 +5,7 @@ import cv2, numpy as np
 import app as g, membership, store, web_portal as web
 
 def main():
-    marker='__SUYING_PORTAL_V24_VERIFIED__'
+    marker='__SUYING_PORTAL_V25_VERIFIED__'
     if store.get_state(marker).get('passed'):
         print('SUYING_PORTAL_SMOKE already verified; skips repeated smoke',flush=True);return
     uid='__SUYING_PORTAL_SMOKE__'+uuid.uuid4().hex
@@ -24,12 +24,18 @@ def main():
                 assert response.status_code==200 and response.json.get('replies')
             data=c.get('/api/portal',base_url=web.ORIGIN).json
             assert data['active'] and len(data['road'])==16
+            rid=uuid.uuid4().hex;keys.append('web:request:'+web.hashed(cookie+rid))
+            response=c.post('/api/command',base_url=web.ORIGIN,headers=headers,json={'command':'開始新桌','mode':'baccarat','request_id':rid})
+            assert response.status_code==200
+            data=c.get('/api/portal',base_url=web.ORIGIN).json
+            assert data['road']==[] and not data['active'] and data['access']
+            assert 'progress' not in data
             assert c.get('/api/admin/activities',base_url=web.ORIGIN).status_code==403
             assert c.get('/').status_code==200
             assert c.post('/api/logout',base_url=web.ORIGIN,headers=headers).status_code==200
             assert c.get('/api/portal',base_url=web.ORIGIN).status_code==401
         store.put_state(marker,{'passed':True,'at':membership.now_tw().isoformat()})
-        print('SUYING_PORTAL_SMOKE PASS: Postgres one-use login, CSRF, shared trial/road/undo, tracking and logout; no messages sent',flush=True)
+        print('SUYING_PORTAL_SMOKE PASS: Postgres one-use login, CSRF, shared trial/road/undo, fresh table reset, tracking and logout; no messages sent',flush=True)
     finally:
         with store.cursor(True) as c:
             for key in keys+[uid,'membership:'+uid]:c.execute('DELETE FROM v2_state WHERE user_id=%s',(key,))

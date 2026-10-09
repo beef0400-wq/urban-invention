@@ -22,7 +22,7 @@ from legacy import baccarat
 from road_vision import parse_baccarat_road_image
 
 app = Flask(__name__)
-APP_VERSION = "SUYING-V2.4-WEB-TEST"
+APP_VERSION = "SUYING-V2.5-CARDS-TEST"
 _USER_LOCKS = {}
 _LOCK_GUARD = threading.Lock()
 
@@ -120,7 +120,6 @@ def main_menu_items():
     return [
         ("開啟甦贏", "開啟甦贏"),
         ("百家實戰", "百家 AI"),
-        ("繼續本桌", "繼續本桌"),
         ("539 好懂看盤", "539 AI"),
         ("賓果看盤", "Bingo AI"),
         ("我的紀錄", "我的紀錄"),
@@ -157,7 +156,6 @@ def welcome_text(user_id):
         "③ 賓果看盤｜真實資料即時分析\n\n"
         f"目前：{membership.status_text(user_id)}\n\n"
         "選一個模式直接開始。"
-        + experience.home_progress(user_id)
     )
 
 

@@ -305,10 +305,11 @@ def test_unique_overlap_and_ambiguous_alignment():
     assert experience.align_road(old,old[-12:]+['閒'])[0]==old+['閒']
     assert experience.align_road(['莊']*30,['莊']*15+['閒'])==(None,None)
 
-def test_resume_from_other_mode_and_home_progress(isolate):
+def test_current_table_from_other_mode_and_home_has_no_resume(isolate):
     paid();send('百家 AI');send(road());send('確認開始');send('539 AI');send('繼續本桌')
     assert membership.get_mode('U1')=='baccarat' and '綜合判讀' in isolate[-1][0]
-    send('主選單');assert '進行中' in isolate[-1][0] and '目前進度' in isolate[-1][0]
+    send('主選單');assert '進行中' not in isolate[-1][0] and '目前進度' not in isolate[-1][0]
+    assert ('繼續本桌','繼續本桌') not in isolate[-1][1]
 
 def test_bingo_window_filter_preserves_freshness(monkeypatch):
     from datetime import datetime

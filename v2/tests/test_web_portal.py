@@ -126,3 +126,19 @@ def test_favorites_limits_persist_and_season_permissions():
         g.ADMIN_USER_IDS={'U_web'}
         assert c.post('/api/admin/activities',base_url=web.ORIGIN,headers=h,json={'action':'season','bingo_featured':True}).status_code==200
         assert c.get('/api/activities').json['bingo_featured'] is True
+
+
+def test_new_table_discards_live_progress_but_preserves_membership_and_records():
+    with g.app.test_client() as c:
+        h=login(c)
+        command(c,h,'免費體驗','trialfresh012345678901')
+        command(c,h,'牌路 紅藍紅紅藍藍紅藍紅藍紅紅藍紅藍和','batchfresh012345678901')
+        command(c,h,'確認開始','startfresh012345678901')
+        command(c,h,'紅','roundfresh012345678901')
+        saved=store.get_state('U_web');saved['favorites_539']=[1,2];store.put_state('U_web',saved)
+        assert command(c,h,'開始新桌','resetfresh012345678901').status_code==200
+        data=c.get('/api/portal',base_url=web.ORIGIN).json
+        assert data['active'] is False and data['road']==[] and not data['pending']
+        assert data['access'] is True and data['favorites']==[1,2]
+        assert store.history('U_web')
+        assert 'undo' not in store.get_state('U_web')

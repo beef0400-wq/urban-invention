@@ -102,3 +102,12 @@ Owner approved new brand 甦贏 and LINE -> full mobile website, simple first la
 - Final UI refinement runtime 43159aa35526225ad964be5f9f0ce07a0516f3e7: direct registration link at homepage top; seasonal Bingo toggle applies to public visitors too. Deployment dep-db3tm8u7bikc73ac96f0 LIVE at 2026-10-08 18:05:34Z (Taipei 02:05:34 Oct9). /health HTTP200 SUYING-V2.4-WEB-TEST; public activities200, unauthenticated portal401.
 - Rollback: restore b19e6dcc1c2456c6bb6e3d1a5660aa76b887924f preserving all DB data. New web auth/draft/campaign/favorite state is additive v2_state, no schema removal.
 - NEXT for new portal: owner sends 開啟甦贏 in research OA; phone login/road image/control acceptance; verify owner sees 活動管理; supply monthly/weekly images. OA account display name and native rich-menu artwork are still owner-managed and have not been renamed by this change.
+
+
+## 甦贏 V2.5 compact cards (2026-10-09 owner requested)
+- Removed homepage progress/resume on both web and LINE; no old table promoted as a next-session entry. Web portal no longer returns aggregate progress.
+- Baccarat starts fresh on first entry in each document session (including reload/new tab): authenticated 開始新桌 clears current road/pending/undo/counters; membership, favorites and historical records retained. Continuous rounds and navigation within the current open page remain usable.
+- All web surfaces share compact icon cards; primary home cards shortened and Bingo remains subordinate. Reports split losslessly into small cards with exact number chips; first three cards visible, remaining cards individually expandable. No invented chart data or fake scores.
+- LINE Flex uses smaller kilo bubbles, two sections per card, full actions on first card and lightweight home action on subsequent cards. All report text and original commands retained.
+- 56 local tests PASS; JS syntax and report preservation/escaping/number-chip smoke PASS. Startup validates 13 official LINE formats and fresh-table Postgres smoke under V25 marker; no messages sent.
+- Deployment and browser visual verification pending. Previous runtime rollback 43159aa35526225ad964be5f9f0ce07a0516f3e7; preserve all DB data.

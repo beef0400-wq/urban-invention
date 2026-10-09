@@ -22,7 +22,7 @@ def main():
         send('追加 藍和');assert ba.get_user(uid)['current_road']==old['current_road']
         send('確認修正');assert ba.get_user(uid)['current_road']==old['current_road']+['閒','和']
         send('撤回上一筆');send('539 AI');send('繼續本桌');assert membership.get_mode(uid)=='baccarat'
-        send('主選單');assert '目前進度' in responses[-1][0]
+        send('主選單');assert '甦贏' in responses[-1][0] and '目前進度' not in responses[-1][0]
         send('今日追蹤');assert '今日追蹤' in responses[-1][0]
         # Validate real router output JSON through LINE; no delivery endpoint is used.
         import line_ui,requests
