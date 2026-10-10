@@ -176,4 +176,4 @@ Owner approved new brand 甦贏 and LINE -> full mobile website, simple first la
 - Startup always validates isolated DB; complete release gates run once per source digest, with receipt persisted only after all checks pass. Identical-version restarts reuse receipt; new code re-runs gates.
 - Adds non-identifying event, image download and parser timings. 94 regression tests PASS; actual full screenshot local parse approximately 0.3 seconds. This is NOT an end-to-end LINE timing claim.
 - Render service currently free. Code reduces startup work but cannot remove Render free-plan idle sleep. Paid always-on hosting requires owner billing decision; no plan changed.
-- Deployment/remote verification pending below.
+- Initial runtime commit 96f6c23aa9b058f24e7faf98a0b893c5494ecbac, deploy dep-db54viflk1mc738ovlv0 LIVE 2026-10-10T14:47:41Z; remote health 200 V2.10. Added release-specific experience/portal gates and real-image -> confirmation -> red -> undo Postgres smoke for final verification.

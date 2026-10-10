@@ -1,12 +1,12 @@
 """Isolated Postgres experience smoke; synthetic identity, replies captured only."""
 import os,uuid
-from deployment_preflight import validate_database_url
+from deployment_preflight import validate_database_url, release_digest
 
 def main():
     validate_database_url(os.environ.get('DATABASE_URL',''))
     import app as g,store,membership,experience
     from legacy import baccarat as ba
-    release_key='__V2_EXPERIENCE_V23_VERIFIED__'
+    release_key='runtime:experience:'+release_digest()
     if store.get_state(release_key).get('passed'):
         print('V2_EXPERIENCE_SMOKE already verified; startup skips repeated smoke',flush=True)
         return
