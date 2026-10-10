@@ -46,7 +46,7 @@ def main():
                 assert response.status_code==200
             data=c.get('/api/portal',base_url=web.ORIGIN).json
             assert data['active'] and len(data['road'])==30
-            assert data['road'].count('莊')==13 and data['road'].count('閒')==13 and data['road'].count('和')==4
+            assert data['road'].count('紅')==13 and data['road'].count('藍')==13 and data['road'].count('和')==4
             assert c.get('/api/admin/activities',base_url=web.ORIGIN).status_code==403
             assert c.get('/').status_code==200
             assert c.post('/api/logout',base_url=web.ORIGIN,headers=headers).status_code==200
