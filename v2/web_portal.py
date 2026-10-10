@@ -199,7 +199,7 @@ def install(g):
         with g.user_lock(uid):
             membership.set_mode(uid,'baccarat')
             if not parsed.accepted:
-                return jsonify(replies=[{'text':f'這張路單還不能可靠辨識。\n辨識信心：{round(parsed.confidence*100)}%\n原因：{parsed.note}\n請重傳完整珠盤路，或改用手動輸入。','buttons':[]}])
+                return jsonify(replies=[{'text':f'這張路單還不能完整核對。\n原因：{parsed.note}\n請重傳目前桌的完整六列珠盤路，或改用手動輸入。','buttons':[{'label':'手動匯入','command':'匯入牌路'}]}])
             choice=experience.stage_choices(uid,parsed.sequence,'image',parsed.confidence)
             text=choice or v2_flows.pending(uid,parsed.sequence,'image',parsed.confidence)
             buttons=experience.choice_buttons(uid) if choice else v2_flows.CONFIRM_BUTTONS

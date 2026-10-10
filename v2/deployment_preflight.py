@@ -1,6 +1,8 @@
 """Isolated Render test gate. Runs before importing legacy database initializers."""
 import os
 import uuid
+import hashlib
+import json
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -24,6 +26,52 @@ def validate_database_url(url):
 def migration_body(path):
     lines = path.read_text().splitlines()
     return '\n'.join(line for line in lines if line.strip().upper() not in {'BEGIN;', 'COMMIT;'})
+
+
+def release_digest():
+    root = Path(__file__).resolve().parent
+    digest = hashlib.sha256()
+    for path in sorted(root.rglob('*')):
+        if path.suffix not in {'.py', '.sql', '.html', '.css', '.js', '.txt'} or '__pycache__' in path.parts:
+            continue
+        digest.update(str(path.relative_to(root)).encode())
+        digest.update(path.read_bytes())
+    return digest.hexdigest()
+
+
+def cached_release(url, digest, write=False):
+    # Always validate isolated DB identity, even on a warm restart. No gate is
+    # skipped for new code. A receipt is written only after ALL checks succeed.
+    validate_database_url(url)
+    with psycopg2.connect(url, sslmode='require', connect_timeout=5) as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT to_regclass('public.v2_state')")
+            if cur.fetchone()[0] is None:
+                return False
+            key = 'runtime:validated-release'
+            if write:
+                cur.execute('INSERT INTO v2_state VALUES (%s,%s) ON CONFLICT(user_id) DO UPDATE SET payload=excluded.payload',
+                            (key, json.dumps({'digest': digest})))
+                return True
+            cur.execute('SELECT payload FROM v2_state WHERE user_id=%s', (key,))
+            row = cur.fetchone()
+            return bool(row and json.loads(row[0]).get('digest') == digest)
+
+
+def run_release_checks():
+    url = os.environ.get('DATABASE_URL', '')
+    digest = release_digest()
+    if cached_release(url, digest):
+        print('V2_RESTART_PREFLIGHT PASS: isolated DB and previously validated identical release', flush=True)
+        return
+    main()
+    from ui_preflight import main as validate_ui
+    validate_ui()
+    from experience_smoke import main as check_experience
+    check_experience()
+    from portal_smoke import main as check_portal
+    check_portal()
+    cached_release(url, digest, write=True)
 
 
 def main():
@@ -74,11 +122,4 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
-    from ui_preflight import main as validate_ui
-    validate_ui()
-    from experience_smoke import main as check_experience
-    check_experience()
-
-    from portal_smoke import main as check_portal
-    check_portal()
+    run_release_checks()

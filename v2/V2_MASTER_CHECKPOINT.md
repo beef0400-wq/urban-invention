@@ -166,3 +166,14 @@ Owner approved new brand 甦贏 and LINE -> full mobile website, simple first la
 - User explicitly requested adding the LINE identity shown in their /myid screenshot. Added it to the private OWNER_ADMIN_USER_ID list; existing owner and ADMIN_USER_IDS preserved. No raw LINE IDs committed.
 - Source supports comma-separated private owner list across router and both legacy engines. 15 admin configuration tests PASS plus three-module multiple-owner check PASS.
 - Environment-triggered deploy dep-db4bhfnlot8c738fn61g LIVE 2026-10-09T09:51:05Z. DB preflight and 17 LINE message validations PASS. New administrator can send 管理會員 or enter personal center via their own LINE link.
+
+## V2.10 road recognition and latency (2026-10-10)
+- Owner authorized fixing road interpretation and slow responses; retains manual per-round red/blue/tie entry. No table feed or automated betting added.
+- Replaced permissive multi-road acceptance with six-row, regularly spaced bead-grid detection separated by symbol size. Checks actual disk pixels, complete chronological prefix, unclipped cells and ambiguous multiple boards. No inferred outcomes for blank cells. Low-ink JPEG bridges can be split; uncertain images rejected.
+- User's actual IMG_0983 phone screenshot independently matched all 30 outcomes: banker 13, player 13, tie 4. Real cropped road fixture plus compression/scale, full phone canvas, missing cell, clipping and two-board rejection tests added.
+- Removed uncalibrated confidence percentages from LINE/web cards. Preview displays total and separate red/blue/tie counts, confirm-start and one-click per-round instructions.
+- Reuses bounded Postgres connections across router and legacy engines; guarantees rollback/release and closes legacy with-block connections. Membership bootstrap deduplicated within an event only; access decisions still queried live.
+- Startup always validates isolated DB; complete release gates run once per source digest, with receipt persisted only after all checks pass. Identical-version restarts reuse receipt; new code re-runs gates.
+- Adds non-identifying event, image download and parser timings. 94 regression tests PASS; actual full screenshot local parse approximately 0.3 seconds. This is NOT an end-to-end LINE timing claim.
+- Render service currently free. Code reduces startup work but cannot remove Render free-plan idle sleep. Paid always-on hosting requires owner billing decision; no plan changed.
+- Deployment/remote verification pending below.

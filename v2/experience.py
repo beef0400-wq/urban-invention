@@ -42,7 +42,7 @@ def stage_choices(uid,seq,source,confidence=None):
     store.put_state(uid,state)
     note=f'可對齊目前牌路，預計新增 {added} 局。' if merged is not None else '無法唯一對齊目前牌路；不會自動合併。可換新桌，或取消後重新截完整牌路。'
     readable=' '.join(f'{i+1}:{ {"莊":"紅","閒":"藍","和":"和"}[x] }' for i,x in enumerate(seq))
-    confidence_note=f'辨識信心：{round(confidence*100)}%（不是正確率保證）\n' if confidence is not None else ''
+    confidence_note=f'共 {len(seq)} 局｜紅 {seq.count("莊")}／藍 {seq.count("閒")}／和 {seq.count("和")}\n' if confidence is not None else ''
     return '百家 AI｜核對本桌更新\n\n'+confidence_note+note+'\n\n新匯入牌路\n'+readable+'\n\n請核對新截圖／牌路，再選更新本桌或換新桌。'
 
 def choice_buttons(uid):

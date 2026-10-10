@@ -3,11 +3,12 @@ import os, json, sqlite3
 from contextlib import contextmanager
 from datetime import datetime, timezone
 import psycopg2
+import db_pool
 
 @contextmanager
 def cursor(write=False):
     url = os.getenv('DATABASE_URL', '')
-    conn = psycopg2.connect(url, sslmode='require') if url else sqlite3.connect(os.getenv('LOCAL_DB_PATH', 'v2-local.sqlite3'))
+    conn = db_pool.connect(url) if url else sqlite3.connect(os.getenv('LOCAL_DB_PATH', 'v2-local.sqlite3'))
     cur = conn.cursor()
     class Adapter:
         def execute(self, sql, args=()):

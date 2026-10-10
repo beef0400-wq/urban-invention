@@ -16,13 +16,14 @@ import admin_experience, account_access, account_binding
 import web_portal
 import sys
 import threading
+import time
 from contextlib import contextmanager
 from legacy import lotto539
 from legacy import baccarat
 from road_vision import parse_baccarat_road_image
 
 app = Flask(__name__)
-APP_VERSION = "SUYING-V2.9-COMPACT-UI-TEST"
+APP_VERSION = "SUYING-V2.10-ROAD-SPEED-TEST"
 _USER_LOCKS = {}
 _LOCK_GUARD = threading.Lock()
 
@@ -94,21 +95,23 @@ def handle_baccarat_image(event, user_id, reply_token):
         reply_text(reply_token, account_access.access_notice(user_id), account_access.trial_buttons(user_id)+[("綁定帳號", "綁定帳號"), ("會員中心", "會員中心")])
         return
     message_id = event.get("message", {}).get("id")
+    downloaded = time.monotonic()
     image_bytes = fetch_line_image(message_id)
+    app.logger.info('ROAD_DOWNLOAD duration_ms=%d success=%s', (time.monotonic()-downloaded)*1000, bool(image_bytes))
     if not image_bytes:
         reply_text(reply_token, "圖片下載失敗，請重新傳一次完整路單截圖。", mode_menu("baccarat"))
         return
     if len(image_bytes)>12*1024*1024:
         reply_text(reply_token,"圖片過大，請裁切路單區後再傳。",mode_menu("baccarat")); return
+    started = time.monotonic()
     parsed = parse_baccarat_road_image(image_bytes, min_main_results=baccarat.MIN_ROAD_LEN)
+    app.logger.info('ROAD_PARSE duration_ms=%d accepted=%s cells=%d', (time.monotonic()-started)*1000, parsed.accepted, len(parsed.sequence))
     if not parsed.accepted:
         reply_text(
             reply_token,
             "⚠️ 這張路單我沒有足夠把握自動帶入。\n\n"
-            f"辨識信心：{round(parsed.confidence*100)}%\n"
-            f"辨識主路：{sum(1 for x in parsed.sequence if x in ('莊','閒'))} 把\n"
             f"原因：{parsed.note}\n\n"
-            "請重新截『完整路單區』，或用文字一次貼上：\n牌路 紅藍紅紅藍…",
+            "請截目前桌的完整六列珠盤路（莊／閒／和），或用文字一次貼上：\n牌路 紅藍紅紅藍…",
             [("手動匯入", "匯入牌路"), ("主選單", "主選單")],
         )
         return
@@ -310,7 +313,7 @@ def _handle_global_text(event, text, user_id, reply_token):
 
     if normalized == "傳路單截圖":
         membership.set_mode(user_id, "baccarat")
-        reply_text(reply_token, "直接把目前桌面的完整路單截圖傳到這裡即可。\n\n建議：路單區要完整、不要裁掉左右兩側；如果有多個路單區，盡量讓主路／珠盤路清楚。", mode_menu("baccarat"))
+        reply_text(reply_token, "傳目前桌的完整珠盤路截圖（六列紅／藍／和圓點）。\n\n不要裁掉最上或最下的圓點；整張桌面截圖也可以。\n辨識後先核對局數與順序，再按「確認開始」。", mode_menu("baccarat"))
         return True
 
     if False and normalized == "今日 AI 分析":
@@ -365,6 +368,15 @@ def webhook():
 
 
 def process_event(event):
+    started = time.monotonic()
+    try:
+        with membership.request_scope():
+            return _process_event(event)
+    finally:
+        app.logger.info('EVENT_PROCESS duration_ms=%d type=%s', (time.monotonic()-started)*1000, event.get('message',{}).get('type',event.get('type')))
+
+
+def _process_event(event):
     user_id = event.get("source", {}).get("userId", "")
     reply_token = event.get("replyToken")
     if not user_id:

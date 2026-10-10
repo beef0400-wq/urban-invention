@@ -1,6 +1,18 @@
 import os
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
+from contextvars import ContextVar
+import db_pool
+
+_ensured = ContextVar('membership_ensured', default=None)
+
+@contextmanager
+def request_scope():
+    token = _ensured.set(set())
+    try:
+        yield
+    finally:
+        _ensured.reset(token)
 
 try:
     import psycopg2
@@ -22,7 +34,7 @@ def _cursor(commit=False):
     if not DATABASE_URL or not psycopg2:
         yield None
         return
-    conn = psycopg2.connect(DATABASE_URL, sslmode="require")
+    conn = db_pool.connect(DATABASE_URL)
     cur = conn.cursor()
     try:
         yield cur
@@ -82,6 +94,9 @@ def init_db():
 def ensure_user(user_id):
     if not user_id:
         return
+    ensured = _ensured.get()
+    if ensured is not None and user_id in ensured:
+        return
     t = now_tw()
     if not DATABASE_URL or not psycopg2:
         import store
@@ -97,6 +112,7 @@ def ensure_user(user_id):
             "trial_started_at": None,
             "trial_expires_at": None,
         })
+        if ensured is not None: ensured.add(user_id)
         return
     with _cursor(commit=True) as cur:
         cur.execute("""
@@ -110,6 +126,7 @@ def ensure_user(user_id):
             ON CONFLICT (line_user_id) DO NOTHING;
         """, (user_id, t))
     bootstrap_from_legacy(user_id)
+    if ensured is not None: ensured.add(user_id)
 
 
 def bootstrap_from_legacy(user_id):

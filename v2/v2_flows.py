@@ -19,7 +19,7 @@ def preview(seq):
 
 def pending(uid, seq, source, confidence=None):
     state=store.get_state(uid);state['pending']={'sequence':seq,'source':source,'confidence':confidence};store.put_state(uid,state)
-    return f'請核對辨識結果｜{len(seq)} 局\n'+(f'辨識信心 {round(confidence*100)}%（非正確率保證）\n' if confidence is not None else '')+preview(seq)+'\n\n正確就按確認開始；修正例：修正 3 藍／刪除 3／追加 紅藍和。'
+    return f'請核對牌路｜共 {len(seq)} 局\n紅 {seq.count("莊")}／藍 {seq.count("閒")}／和 {seq.count("和")}\n'+preview(seq)+'\n\n先核對總局數及順序，正確就按「確認開始」。\n開始後每局開出，只按一次紅／藍／和。\n修正例：修正 3 藍／刪除 3／追加 紅藍和。'
 
 def activate(uid,seq):
     ba.ensure_user(uid)

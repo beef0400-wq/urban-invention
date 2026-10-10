@@ -80,7 +80,8 @@ def get_daily_quote():
 def db_cursor(commit=False):
     if not DATABASE_URL:
         raise RuntimeError("DATABASE_URL 未設定")
-    conn = psycopg2.connect(DATABASE_URL, sslmode="require")
+    import db_pool
+    conn = db_pool.connect(DATABASE_URL)
     cur = conn.cursor()
     try:
         yield cur

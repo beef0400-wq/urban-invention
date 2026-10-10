@@ -177,7 +177,8 @@ def use_db():
     return bool(DATABASE_URL and psycopg2)
 
 def db_conn():
-    return psycopg2.connect(DATABASE_URL, cursor_factory=psycopg2.extras.RealDictCursor)
+    import db_pool
+    return db_pool.connect(DATABASE_URL, cursor_factory=psycopg2.extras.RealDictCursor)
 
 def init_db():
     if not use_db():
