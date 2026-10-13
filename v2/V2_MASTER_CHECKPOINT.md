@@ -179,3 +179,14 @@ Owner approved new brand 甦贏 and LINE -> full mobile website, simple first la
 - Initial runtime commit 96f6c23aa9b058f24e7faf98a0b893c5494ecbac, deploy dep-db54viflk1mc738ovlv0 LIVE 2026-10-10T14:47:41Z; remote health 200 V2.10. Added release-specific experience/portal gates and real-image -> confirmation -> red -> undo Postgres smoke for final verification.
 - Final runtime commit 94a727011df75f300cbd4df6e117a24606b4bbae, deploy dep-db551ajhu5js73dirs1g LIVE 2026-10-10T14:51:42Z. Full isolated DB, 17 LINE format cases, real-router experience and real-image portal workflow PASS on Postgres. Intermediate verification-only deployment rejected by gate because smoke compared internal 莊/閒 with public 紅/藍; corrected before final live deployment, prior working service preserved.
 - Plan audit confirms old line-baccarat-bot is paid starter, whereas active unified companion is free. No billing change or old-service replacement performed.
+
+## Hosting replacement (2026-10-11)
+- Owner explicitly authorized Google sign-in, US$7/month compute on current unified service, and suspension of the retired old baccarat service. Current service srv-dami3j740ujc73b1acfg now 0.5c-512mb, single instance; old srv-d7kc371kh4rs73b16ec0 suspended. No account/database/webhook migration performed.
+- Deployment dep-db5kfkcs728c73850j70 LIVE 2026-10-11T08:25:53Z, unchanged source ff497619e3b11b6df4fe2c19327a912a44d5110a. Render confirmed suspended service not billed. Screenshots unavailable due browser capture timeout.
+
+## V2.11 idle connection and main menu (2026-10-13)
+- Paid plan and continuously healthy process verified. Actual 2026-10-12T05:41:34Z webhook failed with psycopg2 SSL decryption/bad-record-MAC error on pooled connection; cleanup masked it with connection-already-closed. This is observed evidence, not proof of every perceived delay.
+- Probe idle/unknown pooled sockets before application code; discard broken connection and replace once. TCP keepalives, process-local pool keys, closed-connection cleanup. Never retry application transactions or outbound messages.
+- Main menu aliases route before mode/analysis handlers; skip binding state writes and whole baccarat-user rewrites when no pending flow exists. Pending binding and legacy input still cancelled, road preserved, live membership checks unchanged.
+- Thread-local reusable LINE HTTP sessions reduce repeated TLS setup. Enabled non-identifying event and LINE-reply durations for production measurement; no tokens/user IDs/message contents logged.
+- 98 pytest tests PASS, compile checks PASS. Deployment validation pending; no end-to-end seconds guarantee.

@@ -17,13 +17,24 @@ import web_portal
 import sys
 import threading
 import time
+import logging
 from contextlib import contextmanager
 from legacy import lotto539
 from legacy import baccarat
 from road_vision import parse_baccarat_road_image
 
 app = Flask(__name__)
-APP_VERSION = "SUYING-V2.10-ROAD-SPEED-TEST"
+APP_VERSION = "SUYING-V2.11-IDLE-CONNECTION-MENU"
+app.logger.setLevel(logging.INFO)
+_LINE_TRANSPORT = threading.local()
+HOME_COMMANDS = {"開始", "主選單", "回主選單", "首頁", "選單"}
+
+def line_session():
+    session = getattr(_LINE_TRANSPORT, 'session', None)
+    if session is None:
+        session = requests.Session()
+        _LINE_TRANSPORT.session = session
+    return session
 _USER_LOCKS = {}
 _LOCK_GUARD = threading.Lock()
 
@@ -61,19 +72,22 @@ def reply_text(reply_token, text, quick_items=None):
     if not reply_token or not CHANNEL_ACCESS_TOKEN:
         return
     messages = line_ui.build_messages(text, quick_items)
-    response = requests.post(
+    started = time.monotonic()
+    response = line_session().post(
         LINE_REPLY_API,
         headers={"Authorization": f"Bearer {CHANNEL_ACCESS_TOKEN}", "Content-Type": "application/json"},
         json={"replyToken": reply_token, "messages": messages},
-        timeout=8,
+        timeout=(3, 8),
     )
+    app.logger.info('LINE_REPLY duration_ms=%d status=%d',
+                    (time.monotonic()-started)*1000, response.status_code)
     response.raise_for_status()
 
 
 def fetch_line_image(message_id):
     if not message_id or not CHANNEL_ACCESS_TOKEN:
         return None
-    r = requests.get(
+    r = line_session().get(
         f"{LINE_CONTENT_API}/{message_id}/content",
         headers={"Authorization": f"Bearer {CHANNEL_ACCESS_TOKEN}"},
         timeout=15,
@@ -244,9 +258,10 @@ def _handle_global_text(event, text, user_id, reply_token):
         reply_text(reply_token,"甦贏｜手機主頁\n\n從LINE或網頁查看歷史資料與個人紀錄。甦贏帳號自動建立，無須另外註冊。\n此連結10分鐘內有效，請勿轉傳。",[("進入甦贏",link),("主選單","主選單")])
         return True
 
-    if normalized in {"開始", "主選單", "回主選單", "首頁", "選單"}:
-        baccarat.ensure_user(user_id)
-        baccarat.update_user(user_id, pending_flow=None, pending_main_result=None)
+    if normalized in HOME_COMMANDS:
+        user = baccarat.ensure_user(user_id)
+        if user.get('pending_flow') is not None or user.get('pending_main_result') is not None:
+            baccarat.update_user(user_id, pending_flow=None, pending_main_result=None)
         reply_text(reply_token, welcome_text(user_id), main_menu_items())
         return True
 
@@ -393,6 +408,12 @@ def _process_event(event):
 
     message = event.get("message", {})
     message_type = message.get("type")
+    if message_type == 'text':
+        home = (message.get('text') or '').replace('　', ' ').strip()
+        if home in HOME_COMMANDS:
+            account_binding.handle(sys.modules[__name__], home, user_id, reply_token)
+            _handle_global_text(event, home, user_id, reply_token)
+            return
     mode = membership.get_mode(user_id)
 
     if message_type == "image":

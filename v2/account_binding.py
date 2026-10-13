@@ -4,8 +4,9 @@ import store,account_access
 def handle(g,text,uid,token):
     state=store.get_state(uid);pending=state.get('account_binding')
     buttons=[('取消綁定','取消綁定'),('個人中心','會員中心')]
-    if text in ('取消綁定','主選單','會員中心','開啟甦贏','百家 AI','539 AI','Bingo AI','免費體驗'):
-        state.pop('account_binding',None);store.put_state(uid,state)
+    if text in ('取消綁定','主選單','回主選單','開始','首頁','選單','會員中心','開啟甦贏','百家 AI','539 AI','Bingo AI','免費體驗'):
+        if 'account_binding' in state:
+            state.pop('account_binding');store.put_state(uid,state)
         if text=='取消綁定':g.reply_text(token,'已取消綁定。',[('綁定帳號','綁定帳號')]);return True
         return False
     if text=='綁定帳號':
