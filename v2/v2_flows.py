@@ -17,9 +17,21 @@ def parse_batch(text):
 def preview(seq):
     return '\n'.join(' '.join(f'{i+1}:{ {"莊":"紅","閒":"藍","和":"和"}[x] }' for i,x in enumerate(seq[start:start+20],start)) for start in range(0,len(seq),20))
 
+def image_history_notice():
+    return '部分歷史提醒：珠盤可能只顯示近期資料；本次局數不一定等於整桌總局數。系統尚未自動核對畫面右側總數。\n若可見圓點與順序都正確，可使用這段牌路繼續；分析僅依已讀取資料。若中間漏格或順序不確定，請先修正或重傳。也可以自行換房後重新上傳。'
+
+def pending_buttons(seq, source):
+    if source != 'image': return CONFIRM_BUTTONS
+    return [(f'使用這 {len(seq)} 局繼續','確認開始'),('修正牌路','修正牌路'),('重新上傳','傳路單截圖'),('換房後重傳','換房後重傳'),('主選單','主選單')]
+
+def pending_text(seq, source):
+    title = f'請核對牌路｜本次讀取共 {len(seq)} 局' if source == 'image' else f'請核對牌路｜共 {len(seq)} 局'
+    note = '\n\n'+image_history_notice() if source == 'image' else ''
+    return title+f'\n紅 {seq.count("莊")}／藍 {seq.count("閒")}／和 {seq.count("和")}\n'+preview(seq)+note+'\n\n先核對可見牌路及順序，正確就按「確認開始」或「使用這幾局繼續」。\n開始後每局開出，只按一次紅／藍／和。\n修正例：修正 3 藍／刪除 3／追加 紅藍和。'
+
 def pending(uid, seq, source, confidence=None):
     state=store.get_state(uid);state['pending']={'sequence':seq,'source':source,'confidence':confidence};store.put_state(uid,state)
-    return f'請核對牌路｜共 {len(seq)} 局\n紅 {seq.count("莊")}／藍 {seq.count("閒")}／和 {seq.count("和")}\n'+preview(seq)+'\n\n先核對總局數及順序，正確就按「確認開始」。\n開始後每局開出，只按一次紅／藍／和。\n修正例：修正 3 藍／刪除 3／追加 紅藍和。'
+    return pending_text(seq, source)
 
 def activate(uid,seq):
     ba.ensure_user(uid)
@@ -60,6 +72,10 @@ def bingo_board(window=None):
 
 def handle(g,event,text,uid,token):
     # Global commands always precede pending flows.
+    if text=='換房後重傳':
+        membership.set_mode(uid,'baccarat')
+        state=store.get_state(uid);state.pop('pending',None);store.put_state(uid,state)
+        g.reply_text(token,'請自行到遊戲平台選擇新房，再傳新房的完整六列珠盤截圖。\n這個按鈕不會替你切換遊戲房間；原本進行中的牌路會保留，直到你確認換新桌。',[('上傳新房路單','傳路單截圖'),('主選單','主選單')]);return True
     if text in ('我的紀錄','分析紀錄'):
         rows=[r for r in store.history(uid,100) if datetime.fromisoformat(r['at']).astimezone(membership.TZ_TW).date()>=(membership.now_tw()-timedelta(days=4)).date()][:5]
         msg='我的紀錄｜最近5天（最多5筆）\n'+'\n'.join(f'{datetime.fromisoformat(r['at']).astimezone(membership.TZ_TW).strftime('%m/%d %H:%M')}｜{r["mode"]}｜{r["data"].get("kind","分析")}' for r in rows)
@@ -126,7 +142,7 @@ def handle(g,event,text,uid,token):
         choice=experience.stage_choices(uid,batch,'batch')
         g.reply_text(token,choice or pending(uid,batch,'batch'),experience.choice_buttons(uid) if choice else CONFIRM_BUTTONS);return True
     if text in ('修正牌路',):
-        g.reply_text(token,'輸入：修正 3 藍／刪除 3／追加 紅藍和\n'+preview(seq),CONFIRM_BUTTONS);return True
+        g.reply_text(token,'輸入：修正 3 藍／刪除 3／追加 紅藍和\n'+preview(seq),pending_buttons(seq,p.get('source') if p else 'manual'));return True
     if text in ('確認開始','完成匯入'):
         if len(ba.main_only(seq))<ba.MIN_ROAD_LEN:g.reply_text(token,f'目前主路 {len(ba.main_only(seq))} 局，至少需15局；可一次貼上現有牌路。',IMPORT_BUTTONS)
         else:g.reply_text(token,activate(uid,seq),g.baccarat_live_buttons())
@@ -155,6 +171,7 @@ def handle(g,event,text,uid,token):
         if p.get('kind')=='edit':
             p['sequence']=seq;state['pending']=p;store.put_state(uid,state)
             g.reply_text(token,'百家 AI｜修正預覽\n\n'+preview(seq)+'\n\n核對後按確認修正。',[('確認修正','確認修正'),('取消更新','取消更新')])
-        else:g.reply_text(token,pending(uid,seq,p['source'],p.get('confidence')),IMPORT_BUTTONS)
+        else:g.reply_text(token,pending(uid,seq,p['source'],p.get('confidence')),pending_buttons(seq,'image') if p['source']=='image' else IMPORT_BUTTONS)
     except (ValueError,KeyError,IndexError):g.reply_text(token,'格式不正確；例：修正 3 藍／刪除 3／追加 紅藍和。',CONFIRM_BUTTONS)
     return True
+
