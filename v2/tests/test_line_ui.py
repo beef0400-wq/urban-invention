@@ -43,7 +43,8 @@ def test_home_is_one_wide_card_and_labels_wrap():
     assert len(messages)==1 and messages[0]['contents']['type']=='bubble'
     assert messages[0]['contents']['size']=='mega'
     assert 'quickReply' not in messages[0]
-    tiles=[n for n in walk(messages) if n.get('type')=='box' and n.get('action',{}).get('type')=='message']
-    assert set(n['action']['text'] for n in tiles)==set(b for a,b in main_menu_items())
-    tile=next(n for n in tiles if n['action']['text']=='539 AI')
+    tiles=[n for n in walk(messages) if n.get('type')=='box' and n.get('action',{}).get('type') in ('message','uri')]
+    assert set(n['action'].get('text',n['action'].get('uri')) for n in tiles)==set(b for a,b in main_menu_items())
+    tile=next(n for n in tiles if n['action'].get('text')=='539 AI')
     assert tile['contents'][0]['text']=='539 好懂看盤' and tile['contents'][0]['wrap']
+
