@@ -24,9 +24,11 @@ from legacy import baccarat
 from road_vision import parse_baccarat_road_image
 
 app = Flask(__name__)
-APP_VERSION = "SUYING-V2.11-IDLE-CONNECTION-MENU"
+APP_VERSION = "SUYING-V2.12-OFFICIAL-SITE-LINKS"
 app.logger.setLevel(logging.INFO)
 _LINE_TRANSPORT = threading.local()
+OFFICIAL_SITE_URL = "https://offtable-lab.zippygrebe11.chatgpt.site"
+SITE_COMMANDS = {"甦贏官網", "官網", "官方網站", "回官網"}
 HOME_COMMANDS = {"開始", "主選單", "回主選單", "首頁", "選單"}
 
 def line_session():
@@ -135,7 +137,8 @@ def handle_baccarat_image(event, user_id, reply_token):
 
 def main_menu_items():
     return [
-        ("開啟甦贏", "開啟甦贏"),
+        ("進入實戰", "開啟甦贏"),
+        ("甦贏官網", OFFICIAL_SITE_URL),
         ("百家實戰", "百家 AI"),
         ("539 好懂看盤", "539 AI"),
         ("賓果看盤", "Bingo AI"),
@@ -253,9 +256,13 @@ lotto539.reply_message=lambda token,text: reply_text(token,text,main_menu_items(
 def _handle_global_text(event, text, user_id, reply_token):
     normalized = text.replace("　", " ").strip()
 
-    if normalized in {"開啟甦贏", "甦贏", "手機主頁"}:
+    if normalized in SITE_COMMANDS:
+        reply_text(reply_token,"甦贏官網｜介紹與研究工具\n\n查看功能介紹、使用教學與數據體驗。實際牌局與會員功能請選「進入實戰」。",[("開啟甦贏官網",OFFICIAL_SITE_URL),("進入實戰","開啟甦贏"),("主選單","主選單")])
+        return True
+
+    if normalized in {"開啟甦贏", "甦贏", "手機主頁", "進入實戰"}:
         link=web_portal.issue_link(user_id)
-        reply_text(reply_token,"甦贏｜手機主頁\n\n從LINE或網頁查看歷史資料與個人紀錄。甦贏帳號自動建立，無須另外註冊。\n此連結10分鐘內有效，請勿轉傳。",[("進入甦贏",link),("主選單","主選單")])
+        reply_text(reply_token,"甦贏｜會員實戰網頁\n\n開啟百家、539、賓果實戰。會員資格沿用 LINE；尚未綁定可到會員中心自行綁定。\n此連結10分鐘內有效，請勿轉傳。",[("進入實戰",link),("甦贏官網",OFFICIAL_SITE_URL),("主選單","主選單")])
         return True
 
     if normalized in HOME_COMMANDS:
@@ -410,6 +417,9 @@ def _process_event(event):
     message_type = message.get("type")
     if message_type == 'text':
         home = (message.get('text') or '').replace('　', ' ').strip()
+        if home in SITE_COMMANDS:
+            _handle_global_text(event, home, user_id, reply_token)
+            return
         if home in HOME_COMMANDS:
             account_binding.handle(sys.modules[__name__], home, user_id, reply_token)
             _handle_global_text(event, home, user_id, reply_token)
@@ -480,3 +490,4 @@ VERIFICATION_SCHEDULER = scheduled_verification.start()
 if __name__ == "__main__":
     membership.init_db()
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", "10000")))
+
