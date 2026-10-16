@@ -14,7 +14,7 @@ COOKIE = 'suying_session'
 CAMPAIGNS = '__suying_campaigns__'
 DRAFTS = '__suying_campaign_drafts__'
 SETTINGS = '__suying_home_settings__'
-COMMANDS = {'539完整資訊','539逐號依據','驗證5','539完整紀錄','教學百家','教學539','教學賓果','主選單','百家 AI','539 AI','Bingo AI','今日陪跑','今日追蹤','驗證7','驗證30','驗證90','即時盤','20期','50期','100期','會員中心','免費體驗','我的紀錄','使用教學','繼續本桌','詳細分析','撤回上一筆','修正本桌','確認修正','取消更新','更新本桌','換新桌','結束分析','匯入牌路','匯入莊','匯入閒','匯入和','撤回匯入','清空匯入','確認開始','完成匯入','修正牌路','莊','閒','和','紅','藍','查看待確認牌路','開始新桌'}
+COMMANDS = {'傳路單截圖','換房後重傳','539完整資訊','539逐號依據','驗證5','539完整紀錄','教學百家','教學539','教學賓果','主選單','百家 AI','539 AI','Bingo AI','今日陪跑','今日追蹤','驗證7','驗證30','驗證90','即時盤','20期','50期','100期','會員中心','免費體驗','我的紀錄','使用教學','繼續本桌','詳細分析','撤回上一筆','修正本桌','確認修正','取消更新','更新本桌','換新桌','結束分析','匯入牌路','匯入莊','匯入閒','匯入和','撤回匯入','清空匯入','確認開始','完成匯入','修正牌路','莊','閒','和','紅','藍','查看待確認牌路','開始新桌'}
 
 def hashed(token): return hashlib.sha256(token.encode()).hexdigest()
 def session_key(token): return 'web:session:'+hashed(token)
@@ -181,8 +181,8 @@ def install(g):
             if cmd=='查看待確認牌路':
                 p=store.get_state(uid).get('pending')
                 if not p:return jsonify(replies=[{'text':'目前没有待確認牌路。','buttons':[]}])
-                buttons=experience.choice_buttons(uid) if p.get('kind')=='choice' else [('確認修正','確認修正'),('取消更新','取消更新')] if p.get('kind')=='edit' else v2_flows.CONFIRM_BUTTONS
-                return jsonify(replies=[{'text':'請核對牌路\n'+v2_flows.preview(p['sequence']),'buttons':[{'label':line_ui.public_text(a),'command':b} for a,b in buttons]}])
+                buttons=experience.choice_buttons(uid) if p.get('kind')=='choice' else [('確認修正','確認修正'),('取消更新','取消更新')] if p.get('kind')=='edit' else v2_flows.pending_buttons(p['sequence'],p.get('source'))
+                return jsonify(replies=[{'text':v2_flows.pending_text(p['sequence'],p.get('source')),'buttons':[{'label':line_ui.public_text(a),'command':b} for a,b in buttons]}])
             out=result(uid,lambda:g.process_event({'type':'message','source':{'userId':uid},'replyToken':'web','message':{'type':'text','text':cmd}}))
             store.put_state(key,out)
         return jsonify(out)
@@ -201,8 +201,8 @@ def install(g):
             if not parsed.accepted:
                 return jsonify(replies=[{'text':f'這張路單還不能完整核對。\n原因：{parsed.note}\n請重傳目前桌的完整六列珠盤路，或改用手動輸入。','buttons':[{'label':'手動匯入','command':'匯入牌路'}]}])
             choice=experience.stage_choices(uid,parsed.sequence,'image',parsed.confidence)
-            text=choice or v2_flows.pending(uid,parsed.sequence,'image',parsed.confidence)
-            buttons=experience.choice_buttons(uid) if choice else v2_flows.CONFIRM_BUTTONS
+            text=(choice+'\n\n'+v2_flows.image_history_notice()) if choice else v2_flows.pending(uid,parsed.sequence,'image',parsed.confidence)
+            buttons=experience.choice_buttons(uid) if choice else v2_flows.pending_buttons(parsed.sequence,'image')
             return jsonify(replies=[{'text':line_ui.public_text(text),'buttons':[{'label':line_ui.public_text(a),'command':b} for a,b in buttons]}])
 
     @app.route('/api/admin/activities',methods=['GET','POST'])
@@ -273,3 +273,4 @@ def install(g):
             response.headers['X-Content-Type-Options']='nosniff'
             response.headers['Content-Security-Policy']="default-src 'self'; img-src 'self' data: blob:; style-src 'self'; script-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
         return response
+
