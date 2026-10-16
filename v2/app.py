@@ -24,7 +24,7 @@ from legacy import baccarat
 from road_vision import parse_baccarat_road_image
 
 app = Flask(__name__)
-APP_VERSION = "SUYING-V2.12-OFFICIAL-SITE-LINKS"
+APP_VERSION = "SUYING-V2.13-IMAGE-HISTORY-PASTE"
 app.logger.setLevel(logging.INFO)
 _LINE_TRANSPORT = threading.local()
 OFFICIAL_SITE_URL = "https://offtable-lab.zippygrebe11.chatgpt.site"
@@ -132,7 +132,7 @@ def handle_baccarat_image(event, user_id, reply_token):
         )
         return
     choice=experience.stage_choices(user_id,parsed.sequence,'image',parsed.confidence)
-    reply_text(reply_token, choice or v2_flows.pending(user_id, parsed.sequence, 'image', parsed.confidence), experience.choice_buttons(user_id) if choice else v2_flows.CONFIRM_BUTTONS)
+    reply_text(reply_token, (choice+'\n\n'+v2_flows.image_history_notice()) if choice else v2_flows.pending(user_id, parsed.sequence, 'image', parsed.confidence), experience.choice_buttons(user_id) if choice else v2_flows.pending_buttons(parsed.sequence,'image'))
 
 
 def main_menu_items():
@@ -490,4 +490,5 @@ VERIFICATION_SCHEDULER = scheduled_verification.start()
 if __name__ == "__main__":
     membership.init_db()
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", "10000")))
+
 
