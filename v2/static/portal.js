@@ -4,7 +4,7 @@ const labels={'百家 AI':'百家實戰','539 AI':'539 好懂看盤','Bingo AI':
 const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const btn=(name,cmd,cls='secondary')=>`<button class="${cls}" data-command="${esc(cmd)}">${esc(name)}</button>`;
 const link=(name,target,cls='secondary')=>`<a class="${cls}" href="#${target}">${name}</a>`;
-const subnav=()=>'<div class="subnav"><button data-back>上一步</button><a href="#home">回首頁</a></div>';
+const subnav=()=>'<div class="subnav"><button data-back>上一步</button><a href="#home">實戰首頁</a></div>';
 function notice(text){const n=document.querySelector('#notice');n.textContent=text;n.style.display='block';setTimeout(()=>n.style.display='none',5000)}
 async function api(path,options={}){const headers=options.headers||{};if(state?.csrf)headers['X-CSRF-Token']=state.csrf;const r=await fetch(path,{...options,headers});if(r.status===401){state=null;throw Error('請回 LINE 點「開啟甦贏」，重新登入。')}const data=await r.json().catch(()=>({}));if(!r.ok)throw Error(data.error||(r.status===413?'圖片太大，請縮小後再上傳。':'暫時無法完成，請稍後再試。'));return data}
 async function refresh(){try{state=await api('/api/portal')}catch(e){if(state)throw e}return state}
@@ -12,7 +12,7 @@ const trialButton=()=>state?.account?.trial_available?btn('免費試用1小時',
 const access=()=>state?.access?'':`<section class="panel"><h2>先開啟完整功能</h2><p>${state?.account.status==='已到期'?'免費試用／會員已到期。請完成註冊、綁定帳號，再回小幫手驗證開通。':state?.account.username?'帳號已綁定，請回小幫手驗證開通。':'免費試用1小時，百家、539與賓果都能使用。'}</p><div class="actions">${trialButton()}${link('個人中心','member')}</div></section>`;
 const road=()=>state?.road?.length?`<section class="panel" id="current-road"><h2>目前本桌 · ${state.road.length} 局</h2><div class="road">${state.road.slice(-60).map((n,i)=>`<span class="bead ${n==='藍'?'blue':n==='和'?'green':''}" title="第${Math.max(0,state.road.length-60)+i+1}局">${n}</span>`).join('')}</div>${state.road.length>60?'<p class="muted">顯示最後60局，完整牌路保存在本桌。</p>':''}</section>`:'';
 function activitiesHTML(items){return items.length?`<div class="activity-grid">${items.map(x=>`<a class="activity" href="#activity/${x.kind}"><img src="${esc(x.image_url)}" alt="${esc(x.title)}"><div class="info"><span class="tag">${x.kind==='month'?'本月主打':'本週活動'}</span><h3>${esc(x.title)}</h3><p>點開看活動內容</p></div></a>`).join('')}</div>`:'<div class="activity-strip"><span>本月／本週活動</span><span>新活動準備中</span></div>'}
-function loginHTML(){return '<section class="panel"><h2>從 LINE 開啟，接著用</h2><p>在聊天室點「開啟甦贏」，再點「進入甦贏」。會員資格會自動帶入。百家每次重新開啟，都從目前路單開始。</p><a class="primary wide" href="https://line.me/R/ti/p/@957ridwt">回到 LINE</a></section>'}
+function loginHTML(){return '<section class="panel"><h2>從 LINE 開啟，接著用</h2><p>到 LINE 後送出「開啟甦贏」，再點回覆中的「進入實戰」。會員資格會自動帶入。百家每次重新開啟，都從目前路單開始。</p><a class="primary wide" href="https://line.me/R/oaMessage/%40957ridwt/?%E9%96%8B%E5%95%9F%E7%94%A6%E8%B4%8F">到 LINE 取得登入連結</a></section>'}
 function formatTime(s){return new Intl.DateTimeFormat('zh-TW',{timeZone:'Asia/Taipei',month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'}).format(new Date(s))}
 async function render(){const requested=location.hash.slice(1)||'home';if(route!==requested){lastPage=route||'home';route=requested}main.innerHTML='<div class="loading" role="status">正在準備畫面…</div>';await refresh();if(route!==requested)return;
 if(route==='baccarat'&&state&&!deskOpened){await requestCommand('開始新桌');deskOpened=true;await refresh();if(route!==requested)return;}document.querySelectorAll('.bottom a').forEach(a=>a.classList.toggle('current',a.hash==='#'+route));let html='';
@@ -110,3 +110,4 @@ async function grantAccount(){if(busy)return;const code=document.querySelector('
 async function bindAccount(){if(busy)return;const username=document.querySelector('#bind-username').value.trim();if(!confirm('確認綁定帳號：'+username+'\n請確認拼字。綁定後請回小幫手驗證開通。'))return;busy=true;setDisabled(true);try{const out=await api('/api/account/bind',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username})});await render();alert(out.message)}catch(e){notice(e.message)}finally{busy=false;setDisabled(false)}}
 let remindedExpiry='';
 setInterval(async()=>{const a=state?.account;if(!a?.trial_active||!a.expires_at||new Date(a.expires_at)>new Date()||busy||remindedExpiry===a.expires_at)return;try{await refresh();if(state?.account.trial_active)return;remindedExpiry=a.expires_at;await render();alert('免費試用已到期。請完成註冊、綁定帳號，再回小幫手驗證開通。')}catch(e){notice(e.message)}},15000);
+
