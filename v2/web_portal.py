@@ -159,7 +159,7 @@ def install(g):
         captured=[];handle=CAPTURE.set(captured)
         try: action()
         finally: CAPTURE.reset(handle)
-        return {'replies':[{'text':line_ui.public_text(text),'buttons':[{'label':line_ui.public_text(a),'command':b} for a,b in (buttons or []) if b in COMMANDS]} for text,buttons in captured]}
+        return {'replies':[{'text':line_ui.public_text(text),'buttons':[{'label':line_ui.public_text(a),'command':b} for a,b in (buttons or []) if b in COMMANDS or b == account_access.HELPER_URL]} for text,buttons in captured]}
 
     @app.post('/api/command')
     def command():
@@ -273,4 +273,5 @@ def install(g):
             response.headers['X-Content-Type-Options']='nosniff'
             response.headers['Content-Security-Policy']="default-src 'self'; img-src 'self' data: blob:; style-src 'self'; script-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
         return response
+
 

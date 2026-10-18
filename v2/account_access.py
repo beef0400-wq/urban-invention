@@ -38,7 +38,8 @@ def recent(limit=10):
     rows.sort(key=lambda row:json.loads(row[1]).get('created_at',''),reverse=True)
     return [(key[len(PREFIX):],json.loads(payload)['uid']) for key,payload in rows[:limit]]
 
-SUCCESS = '綁定完成！請回小幫手驗證開通。\n將此帳號提供給小幫手，管理員確認後即可開通。'
+HELPER_URL = 'https://lin.ee/PJeK8ti'
+SUCCESS = '綁定完成！下一步：點「找小幫手」，傳送你綁定的帳號並告知「我要開通甦贏」。\n管理員確認並開通後，再回甦贏查看會員中心與使用期限。綁定不等於開通；不需要提供密碼或驗證碼。'
 
 def validate_username(value):
     name=str(value).strip()
@@ -70,3 +71,4 @@ def access_notice(uid):
         return '免費試用已到期。請完成註冊、綁定帳號，再回小幫手驗證開通。'
     if profile(uid)['username']:return '帳號已綁定，請回小幫手驗證開通。'
     return '請先開啟免費試用1小時，或綁定帳號後回小幫手驗證開通。'
+
