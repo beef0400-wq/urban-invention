@@ -24,7 +24,7 @@ from legacy import baccarat
 from road_vision import parse_baccarat_road_image
 
 app = Flask(__name__)
-APP_VERSION = "SUYING-V2.13-IMAGE-HISTORY-PASTE"
+APP_VERSION = "SUYING-V2.14-HELPER-ONBOARDING"
 app.logger.setLevel(logging.INFO)
 _LINE_TRANSPORT = threading.local()
 OFFICIAL_SITE_URL = "https://offtable-lab.zippygrebe11.chatgpt.site"
@@ -67,6 +67,8 @@ def verify_signature(raw_body, signature):
 
 
 def reply_text(reply_token, text, quick_items=None):
+    if '小幫手' in text and not any(value == account_access.HELPER_URL for _, value in (quick_items or [])):
+        quick_items = [('找小幫手', account_access.HELPER_URL)] + list(quick_items or [])
     captured = web_portal.CAPTURE.get()
     if captured is not None:
         captured.append((text, quick_items))
@@ -146,6 +148,8 @@ def main_menu_items():
         ("使用教學", "使用教學"),
         ("會員中心", "會員中心"),
         ("綁定帳號", "綁定帳號"),
+        ("找小幫手", account_access.HELPER_URL),
+        ("怎麼開通", "怎麼開通"),
     ]
 
 
@@ -170,14 +174,21 @@ def mode_menu(mode):
 
 def welcome_text(user_id):
     return (
-        "🎲 甦贏\n\n"
+        "歡迎來到甦贏｜第一次使用看這裡\n\n"
+        "① 想先體驗：點「免費試用1小時」，三種模式都能使用。限未綁定、未使用過試用者。\n"
+        "② 想正式使用：點「綁定帳號」→「找小幫手」，傳送綁定帳號並告知「我要開通甦贏」。\n"
+        "③ 管理員確認開通後，回會員中心查看期限，再選模式開始。綁定不等於開通。\n\n"
         "一個會員，同時使用：\n"
         "① 百家實戰｜路單截圖匯入＋即時多訊號分析\n"
         "② 539 好懂看盤｜每日模型＋母盤＋開獎後驗證\n"
         "③ 賓果看盤｜真實資料即時分析\n\n"
         f"目前：{membership.status_text(user_id)}\n\n"
-        "選一個模式直接開始。"
+        "不會操作？點「使用教學」，三種模式都有說明。\n可直接在 LINE 使用，或點「進入實戰」開網頁。分析供參考，不保證結果。"
     )
+
+
+def welcome_buttons(user_id):
+    return account_access.trial_buttons(user_id) + [('使用教學','使用教學'),('綁定帳號','綁定帳號'),('找小幫手',account_access.HELPER_URL),('進入實戰','開啟甦贏'),('主選單','主選單')]
 
 
 def patch_legacy_access():
@@ -255,6 +266,10 @@ lotto539.reply_message=lambda token,text: reply_text(token,text,main_menu_items(
 
 def _handle_global_text(event, text, user_id, reply_token):
     normalized = text.replace("　", " ").strip()
+
+    if normalized in {'小幫手','找小幫手','聯絡客服','綁定/疑問','怎麼開通','開通教學'}:
+        reply_text(reply_token, '甦贏｜開通與小幫手\n\n① 點「綁定帳號」，輸入並確認你的帳號。\n② 點「找小幫手」加入好友，傳送綁定帳號，告知「我要開通甦贏」或描述問題。\n③ 管理員驗證開通後，回「會員中心」查看使用期限。\n④ 點「使用教學」選模式，或「進入實戰」用網頁操作。\n\n綁定不等於開通。請勿提供密碼或驗證碼。', [('找小幫手',account_access.HELPER_URL),('綁定帳號','綁定帳號'),('會員中心','會員中心'),('使用教學','使用教學'),('主選單','主選單')])
+        return True
 
     if normalized in SITE_COMMANDS:
         reply_text(reply_token,"甦贏官網｜介紹與研究工具\n\n查看功能介紹、使用教學與數據體驗。實際牌局與會員功能請選「進入實戰」。",[("開啟甦贏官網",OFFICIAL_SITE_URL),("進入實戰","開啟甦贏"),("主選單","主選單")])
@@ -407,7 +422,7 @@ def _process_event(event):
     account_access.ensure(user_id)
 
     if event.get("type") == "follow":
-        reply_text(reply_token, welcome_text(user_id), main_menu_items())
+        reply_text(reply_token, welcome_text(user_id), welcome_buttons(user_id))
         return
 
     if event.get("type") != "message":
@@ -490,5 +505,6 @@ VERIFICATION_SCHEDULER = scheduled_verification.start()
 if __name__ == "__main__":
     membership.init_db()
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", "10000")))
+
 
 
