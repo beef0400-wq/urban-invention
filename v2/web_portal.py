@@ -16,6 +16,8 @@ DRAFTS = '__suying_campaign_drafts__'
 SETTINGS = '__suying_home_settings__'
 COMMANDS = {'傳路單截圖','換房後重傳','539完整資訊','539逐號依據','驗證5','539完整紀錄','教學百家','教學539','教學賓果','主選單','百家 AI','539 AI','Bingo AI','今日陪跑','今日追蹤','驗證7','驗證30','驗證90','即時盤','20期','50期','100期','會員中心','免費體驗','我的紀錄','使用教學','繼續本桌','詳細分析','撤回上一筆','修正本桌','確認修正','取消更新','更新本桌','換新桌','結束分析','匯入牌路','匯入莊','匯入閒','匯入和','撤回匯入','清空匯入','確認開始','完成匯入','修正牌路','莊','閒','和','紅','藍','查看待確認牌路','開始新桌'}
 
+COMMANDS.update({'賓果分析依據', '賓果上期開獎'})
+
 def hashed(token): return hashlib.sha256(token.encode()).hexdigest()
 def session_key(token): return 'web:session:'+hashed(token)
 def issue_link(uid):
@@ -117,12 +119,12 @@ def install(g):
     def lotto_overview():
         from legacy import lotto539 as engine
         import verification
-        today = membership.now_tw().date()
+        today = engine.recommendation_date_539()
         draws = engine.load_539_draws(10)
         previous = next(((d, n) for d, n in draws if d < today), None)
         latest = draws[0] if draws else None
         data = dict(target_date=today.isoformat(), previous=None, latest=None, prediction=None,
-                    status='登入會員／試用後查看' if today.weekday()!=6 else '今日休市')
+                    status='登入會員／試用後查看推薦')
         def draw_json(row):
             return dict(date=row[0].isoformat(), numbers=sorted(row[1])) if row else None
         data['previous'] = draw_json(previous)
@@ -131,7 +133,7 @@ def install(g):
         session = store.get_state(session_key(token)) if token else {}
         if session and datetime.fromisoformat(session['expires']) > membership.now_tw() and membership.has_access(session['uid']):
             pack = verification.locked_pack(today)
-            data['status'] = '本期分析尚未鎖定' if today.weekday()!=6 else '今日休市'
+            data['status'] = '按「查看推薦號碼」產生本次推薦'
             if pack:
                 model = json.loads(pack['note'])
                 data['prediction'] = {key: engine.parse_nums_text(model.get(key,'')) for key in ('motherboard','core5','stable2','attack3','burst4')}
@@ -273,5 +275,6 @@ def install(g):
             response.headers['X-Content-Type-Options']='nosniff'
             response.headers['Content-Security-Policy']="default-src 'self'; img-src 'self' data: blob:; style-src 'self'; script-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
         return response
+
 
 

@@ -884,6 +884,16 @@ def build_539_models(draws):
         ),
     }
 
+def recommendation_date_539():
+    now = now_tw()
+    target = now.date()
+    if now.hour >= 20:
+        target += timedelta(days=1)
+    while target.weekday() == 6:
+        target += timedelta(days=1)
+    return target
+
+
 def get_or_build_today_pick_539():
     """
     取得今日539模型。
@@ -892,10 +902,9 @@ def get_or_build_today_pick_539():
     - 避免畫面標題已更新，但 2星/3星/4星仍吃舊 note。
     """
     import verification
-    locked = verification.locked_pack(today_tw())
+    target = recommendation_date_539()
+    locked = verification.locked_pack(target)
     if locked: return locked
-    if today_tw().weekday()==6 or now_tw().hour>=20:
-        raise ValueError("今日休市或已過鎖盤時間；不建立事後分析")
     ensure_latest_539_in_db()
     draws = load_539_draws(limit=240)
     fresh, latest_date, stale_days = is_539_data_fresh(draws[:1])
@@ -905,14 +914,14 @@ def get_or_build_today_pick_539():
             SELECT numbers, hot_zone, top_hot, note
             FROM daily_pick_cache
             WHERE pick_date=%s;
-        """, (today_tw(),))
+        """, (target,))
         row = cur.fetchone()
 
     if row and fresh:
         try:
             cached_note = json.loads(row[3] or "{}")
             if cached_note.get("model_version") == APP_VERSION:
-                return verification.lock({"numbers": row[0], "hot_zone": row[1], "top_hot": row[2], "note": row[3]})
+                return verification.lock({"numbers": row[0], "hot_zone": row[1], "top_hot": row[2], "note": row[3]}, target=target)
             else:
                 log("539_CACHE_VERSION_MISMATCH_REBUILD:", cached_note.get("model_version"), APP_VERSION)
         except Exception:
@@ -971,9 +980,9 @@ def get_or_build_today_pick_539():
                 top_hot=EXCLUDED.top_hot,
                 note=EXCLUDED.note,
                 created_at=EXCLUDED.created_at;
-        """, (today_tw(), models["motherboard"], hot_zone, top_hot, note, now_tw()))
+        """, (target, models["motherboard"], hot_zone, top_hot, note, now_tw()))
 
-    return verification.lock({"numbers": models["motherboard"], "hot_zone": hot_zone, "top_hot": top_hot, "note": note})
+    return verification.lock({"numbers": models["motherboard"], "hot_zone": hot_zone, "top_hot": top_hot, "note": note}, target=target)
 
 
 def parse_models_from_note(note):
@@ -998,6 +1007,7 @@ def latest_model_result_text():
 
 def format_today_companion(view='summary'):
     try:
+        target = recommendation_date_539()
         pack = get_or_build_today_pick_539()
         m = parse_models_from_note(pack['note'])
         diag=m.get('diagnostics') or {};mother=parse_nums_text(m['motherboard'])
@@ -1006,7 +1016,7 @@ def format_today_companion(view='summary'):
             m['core5']=fmt_nums(ranked[:5] or mother[:5])
         m.setdefault('top3',fmt_nums(parse_nums_text(m['core5'])[:3]))
         if view=='basis':
-            lines=['539｜母盤逐號依據','日期：'+today_tw().isoformat()+' 期','分數是模型排序，不是開獎機率。']
+            lines=['539｜選號原因','適用開獎日：'+target.isoformat(),'分數是模型排序，不是開獎機率。']
             for n in sorted(mother,key=lambda n:diag.get(str(n),{}).get('score',0),reverse=True):
                 d=diag.get(str(n),{})
                 if not d:continue
@@ -1014,17 +1024,18 @@ def format_today_companion(view='summary'):
             if len(lines)==3:lines.append('此期快取尚無逐號診斷，保留原分析，不重建號碼。')
             return '\n'.join(lines)
         if view=='full':
-            return ('539｜完整資訊\n日期：'+today_tw().isoformat()+' 期\n\n🧩 號碼結構\n'+structure_539(m['motherboard'])+
+            return ('539｜更多選號與分析\n適用開獎日：'+target.isoformat()+'\n\n擴大參考10碼\n'+m['motherboard']+'\n\n兩碼搭配參考（從這3碼選2碼）\n'+m['stable2']+'\n\n三碼搭配參考（從這6碼選3碼）\n'+m['attack3']+'\n\n四碼搭配參考（從這7碼選4碼）\n'+m['burst4']+'\n\n🧩 號碼結構\n'+structure_539(m['motherboard'])+
                     '\n活躍區段：'+pack['hot_zone']+'\n冷號／遺漏補位：'+m.get('cold_note','無')+
                     '\n模型狀態：'+('回補修正' if m.get('model_mode')=='recovery' else '一般縮盤')+
                     '\n歷史資料截至：'+str(m.get('latest_draw_date','未提供'))+'\n資料狀態：'+('已更新' if m.get('data_fresh',True) else '尚未更新')+
                     '\n\n📌 模型說明\n'+m.get('pattern_note','尚無補充說明')+
                     '\n\n分析根據歷史開獎資料；模型分數不等於下一期開獎機率。')
-        previous=next(((d,n) for d,n in load_539_draws(2) if d<today_tw()),None)
-        text=('539｜本期分析預測\n日期：'+today_tw().isoformat()+' 期\n'+
-              ('上期開獎｜實際開出 '+previous[0].isoformat()+'\n'+fmt_nums(previous[1]) if previous else '上期開獎｜資料暫缺')+
-              '\n\n本期分析預測｜母盤10碼\n'+m['motherboard']+'\n核心5碼\n'+m['core5']+
-              '\n\n2星主軸（3碼）\n'+m['stable2']+'\n3星主攻（6碼）\n'+m['attack3']+'\n4星延伸（7碼）\n'+m['burst4'])
+        label = '今日' if target == today_tw() else '下期'
+        text=('539｜'+label+'推薦號碼\n\n推薦5碼\n'+m['core5']+
+              '\n\n適用開獎日：'+target.isoformat()+
+              ('\n今天週日休市，這組是下次開獎的參考。' if today_tw().weekday()==6 else ('\n今日已截止分析，顯示下次開獎的參考。' if target>today_tw() else ''))+
+              '\n歷史資料截至：'+str(m.get('latest_draw_date','未提供'))+
+              '\n想看更多號碼或選號原因，點下方按鈕。\n歷史統計選號，非保證開獎結果。')
         if not m.get('data_fresh',True):text+='\n⚠️ 歷史資料尚未更新，請查看完整資訊。'
         return text
     except Exception as e:
@@ -1820,3 +1831,4 @@ if __name__ == "__main__":
         log("START INIT_DB ERROR:", repr(e))
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
+

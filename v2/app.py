@@ -24,7 +24,7 @@ from legacy import baccarat
 from road_vision import parse_baccarat_road_image
 
 app = Flask(__name__)
-APP_VERSION = "SUYING-V2.14-HELPER-ONBOARDING"
+APP_VERSION = "SUYING-V2.15-RECOMMENDATION-FIRST"
 app.logger.setLevel(logging.INFO)
 _LINE_TRANSPORT = threading.local()
 OFFICIAL_SITE_URL = "https://offtable-lab.zippygrebe11.chatgpt.site"
@@ -162,13 +162,12 @@ def mode_menu(mode):
         ]
     if mode == "bingo":
         return [
-            ("即時盤", "即時盤"), ("20期", "20期"), ("50期", "50期"), ("100期", "100期"),
-            ("539 AI", "539 AI"), ("百家 AI", "百家 AI"),
+            ("更新推薦", "即時盤"), ("選號原因", "賓果分析依據"),
+            ("上期開獎", "賓果上期開獎"), ("怎麼使用", "教學賓果"), ("主選單", "主選單"),
         ]
     return [
-        ("今日分析", "今日陪跑"), ("今日追蹤", "今日追蹤"), ("母盤追蹤", "母盤追蹤"),
-        ("Bingo AI", "Bingo AI"), ("百家 AI", "百家 AI"),
-        ("會員中心", "會員中心"), ("主選單", "主選單"),
+        ("看推薦號碼", "今日陪跑"), ("更多選號", "539完整資訊"),
+        ("選號原因", "539逐號依據"), ("過去推薦紀錄", "驗證5"), ("主選單", "主選單"),
     ]
 
 
@@ -289,11 +288,7 @@ def _handle_global_text(event, text, user_id, reply_token):
 
     if normalized in {"539 AI", "539", "今彩539"}:
         membership.set_mode(user_id, "539")
-        reply_text(
-            reply_token,
-            "已進入【539 AI】。\n\n以歷史開獎資料、統計結構與模型訊號作為決策輔助；未開獎結果仍屬未知。",
-            mode_menu("539"),
-        )
+        v2_flows.handle(sys.modules[__name__], event, '今日陪跑', user_id, reply_token)
         return True
 
     if normalized in {"百家 AI", "百家AI", "百家", "百家樂 AI", "百家樂AI"}:
@@ -313,11 +308,7 @@ def _handle_global_text(event, text, user_id, reply_token):
 
     if normalized in {"Bingo AI", "Bingo", "賓果 AI", "賓果AI", "賓果"}:
         membership.set_mode(user_id, "bingo")
-        reply_text(
-            reply_token,
-            "🟣 Bingo AI\n\n使用真實開獎資料做短線／節奏／結構分析。資料抓取失敗時不會產生模擬開獎。",
-            mode_menu("bingo"),
-        )
+        v2_flows.handle(sys.modules[__name__], event, '即時盤', user_id, reply_token)
         return True
 
     if normalized in {"會員中心", "查詢資格", "我的到期日"}:
@@ -339,10 +330,10 @@ def _handle_global_text(event, text, user_id, reply_token):
     if normalized in {'使用教學','教學百家','教學539','教學賓果'}:
         guides={
             '教學百家': '百家實戰｜操作教學\n\n① 進桌後傳完整路單截圖，或手動輸入。\n② 核對紅／藍／和，按「確認開始」。\n③ 每局開出後只按一次紅／藍／和。\n④ 記錯按「撤回上一筆」；漏記按「補漏／修正」。\n\n怎麼看分析？\n先看本輪觀察、訊號指數與風險；想看每項理由再按「詳細分析」。分數是規則訊號，不是勝率。\n換桌時重新帶入目前路單。',
-            '教學539':'539｜操作教學\n\n① 點「今日分析」查看本期號碼。\n②「上期開獎」是已開出的5個號碼；「本期分析預測」才是這次的分析。\n③ 母盤10碼是主要觀察範圍，核心5碼是其中較優先的號碼。\n④ 2星／3星／4星分別顯示3／6／7碼範圍，組合以該範圍選2／3／4碼；並非每組都會命中。\n\n想知道怎麼選？\n按「母盤逐號依據」看次數、遺漏與模型分數；按「看完整資訊」看結構與說明。\n「最近5期紀錄」可看過去分析與開獎結果。分析分數不等於開獎機率。',
-            '教學賓果':'賓果｜操作教學\n\n① 點「即時盤」看最新資料。\n② 選20期看短線、50期看中段、100期看較長區間。\n③ 看資料時間，先確認資料是否更新。\n\n怎麼看內容？\n熱號：所選區間出現較多；冷號：出現較少。區段與尾數顯示分布，並非下一期必然開出。\n資料太舊或抓取失敗會暫停分析，稍後再查。'}
+            '教學539':'539｜怎麼使用\n\n① 點進539，先看「推薦5碼」。\n② 核對適用開獎日；週日或當天截止後會顯示下期日期。\n③ 想看其他選號，按「更多選號」。\n④ 想知道理由，按「為何選這些號碼」。\n\n「過去推薦紀錄」才是舊分析與已開出的號碼，不是本次推薦。歷史統計不能保證下期結果。',
+            '教學賓果':'賓果｜怎麼使用\n\n① 點進賓果，先看「推薦5碼」。\n② 核對資料時間，這組是下一次開獎的參考。\n③ 開出新一期後，按「更新推薦」。\n④「上期開獎」是已經開出的號碼。\n\n想研究再點「選號原因」。裡面的20／50／100期，是拿多少次過去開獎來統計，不是要你連玩幾期，也不是預測能用幾期。歷史統計不能保證下期結果。'}
         if normalized=='使用教學':
-            reply_text(reply_token,'甦贏｜三種模式怎麼操作\n\n百家實戰\n傳路單 → 核對 → 每局按紅／藍／和。\n\n539 好懂看盤\n分清上期開獎與本期分析，先看號碼，再點開依據。\n\n賓果看盤\n選20／50／100期，查看熱冷號與分布。',[('百家操作教學','教學百家'),('539操作教學','教學539'),('賓果操作教學','教學賓果'),('主選單','主選單')])
+            reply_text(reply_token,'甦贏｜怎麼使用\n\n百家實戰\n傳路單 → 核對 → 每局按紅／藍／和。\n\n539\n點進去看推薦5碼，核對適用開獎日。\n\n賓果\n點進去看推薦5碼，新一期開出後按更新推薦。\n\n想看分析原因，再點各模式的說明按鈕。',[('百家怎麼用','教學百家'),('539怎麼用','教學539'),('賓果怎麼用','教學賓果'),('主選單','主選單')])
         else:
             target={'教學百家':'百家 AI','教學539':'539 AI','教學賓果':'Bingo AI'}[normalized]
             reply_text(reply_token,guides[normalized],[('開始操作',target),('返回教學','使用教學'),('主選單','主選單')])
@@ -505,6 +496,7 @@ VERIFICATION_SCHEDULER = scheduled_verification.start()
 if __name__ == "__main__":
     membership.init_db()
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", "10000")))
+
 
 
 

@@ -41,7 +41,7 @@ def activate(uid,seq):
     store.record(uid,'baccarat',{'kind':'開始','sequence':seq,'analysis':a})
     return ba.decision_card(user,a)
 
-def bingo_board(window=None):
+def bingo_board(window=None, view='recommendation'):
     if not lo.ensure_latest_bingo_in_db(): return 'Bingo 資料異常：目前抓不到可信真實資料，本次不產生分析。'
     draws=lo.load_bingo_draws(120)
     if not draws: return 'Bingo 資料異常：沒有已驗證來源的資料。'
@@ -51,6 +51,16 @@ def bingo_board(window=None):
         age=(lo.now_tw()-stamp).total_seconds()
         if age<0 or age>900: return 'Bingo 資料異常：最新一期已超過15分鐘或時間錯誤，暫停即時分析。'
     except (ValueError,TypeError): return 'Bingo 資料異常：無法核對開獎時間。'
+    if view == 'last':
+        return '賓果｜上期開獎（已開出）\n\n'+lo.fmt_nums(latest['numbers'])+f'\n\n期別：{latest["period"]}\n開獎時間：{latest["date"]} {latest["time"]}\n這是已開出的號碼，不是推薦號碼。'
+    if window is None and view == 'recommendation':
+        model = lo.build_bingo_model(draws[:30], '1期')
+        nums = lo.parse_nums_text(model.get('pick', ''))
+        if not model.get('data_ok') or len(set(nums)) != 5 or any(n < 1 or n > 80 for n in nums):
+            return '賓果｜暫時無法產生推薦\n\n請稍後按「更新推薦」重試。'
+        return ('賓果｜本次推薦號碼\n\n推薦5碼\n'+lo.fmt_nums(nums)+
+                f'\n\n資料截至：{latest["date"]} {latest["time"]}\n依據已開獎期別：{latest["period"]}'+
+                '\n用途：下一次開獎的選號參考。\n每次想看新資料，按「更新推薦」。\n歷史統計選號，非保證開獎結果。')
     lines=['Bingo AI｜即時盤',f'最新一期 {latest["period"]}｜{latest["date"]} {latest["time"]}',lo.fmt_nums(latest['numbers'])]
     for window in ((window,) if window in (20,50,100) else (20,50,100)):
         sample=draws[:window];f=lo.bingo_freq(sample)
@@ -87,18 +97,24 @@ def handle(g,event,text,uid,token):
     if text in ('539完整資訊','539逐號依據'):membership.set_mode(uid,'539')
     if text=='繼續本桌':membership.set_mode(uid,'baccarat')
     mode=membership.get_mode(uid)
-    is_bingo=text in ('即時盤','Bingo分析','賓果分析','20期','50期','100期','1期','5期','10期','賓果1期分析','賓果5期分析','賓果10期分析')
+    is_bingo=text in ('即時盤','Bingo分析','賓果分析','賓果分析依據','賓果上期開獎','20期','50期','100期','1期','5期','10期','賓果1期分析','賓果5期分析','賓果10期分析')
     batch=parse_batch(text) if mode=='baccarat' else None
     handled=is_bingo or (mode=='539' and text in ('今日陪跑','今日分析','今日 AI 分析','539完整資訊','539逐號依據')) or (mode=='baccarat' and (batch is not None or text in ('匯入牌路','確認開始','完成匯入','撤回匯入','清空匯入','修正牌路','匯入莊','匯入閒','匯入和','繼續本桌','修正本桌','撤回上一筆','更新本桌','換新桌','取消更新','確認修正') or text.startswith(('修正 ','刪除 ','追加 ','牌路','快速牌路'))))
     if not handled:return False
     if not membership.has_access(uid):g.reply_text(token,account_access.access_notice(uid),account_access.trial_buttons(uid)+[('綁定帳號','綁定帳號'),('會員中心','會員中心')]);return True
     if is_bingo:
-        membership.set_mode(uid,'bingo');msg=bingo_board(int(text[:-1]) if text in ('20期','50期','100期') else None);store.record(uid,'bingo',{'kind':'即時盤','text':msg});g.reply_text(token,msg,g.mode_menu('bingo'));return True
+        membership.set_mode(uid,'bingo')
+        detail = text in ('賓果分析依據','20期','50期','100期')
+        msg = bingo_board(int(text[:-1]) if text in ('20期','50期','100期') else None,
+                          view='last' if text=='賓果上期開獎' else ('details' if detail else 'recommendation'))
+        store.record(uid,'bingo',{'kind':'分析依據' if detail else ('上期開獎' if text=='賓果上期開獎' else '推薦號碼'),'text':msg})
+        items = [('最近開獎趨勢','20期'),('較多歷史資料','50期'),('完整統計','100期'),('返回推薦','即時盤'),('主選單','主選單')] if detail else g.mode_menu('bingo')
+        g.reply_text(token,msg,items);return True
     if mode=='539':
         view={'539完整資訊':'full','539逐號依據':'basis'}.get(text,'summary')
         msg=lo.format_today_companion(view)
         if view=='summary':store.record(uid,'539',{'kind':'今日分析','text':msg})
-        items=[('看完整資訊','539完整資訊'),('母盤逐號依據','539逐號依據'),('最近5期紀錄','驗證5'),('539操作教學','教學539'),('主選單','主選單')] if view=='summary' else [('返回本期分析','今日陪跑'),('主選單','主選單')]
+        items=[('更多選號','539完整資訊'),('為何選這些號碼','539逐號依據'),('過去推薦紀錄','驗證5'),('怎麼使用','教學539'),('主選單','主選單')] if view=='summary' else [('返回推薦號碼','今日陪跑'),('主選單','主選單')]
         g.reply_text(token,msg,items);return True
     state=store.get_state(uid);p=state.get('pending');seq=list(p['sequence']) if p else []
     user=ba.get_user(uid) or {}
@@ -174,4 +190,5 @@ def handle(g,event,text,uid,token):
         else:g.reply_text(token,pending(uid,seq,p['source'],p.get('confidence')),pending_buttons(seq,'image') if p['source']=='image' else IMPORT_BUTTONS)
     except (ValueError,KeyError,IndexError):g.reply_text(token,'格式不正確；例：修正 3 藍／刪除 3／追加 紅藍和。',CONFIRM_BUTTONS)
     return True
+
 
