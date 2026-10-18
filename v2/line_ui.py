@@ -101,8 +101,36 @@ def bubble(key,title,groups,items,page,total):
                     'contents':[section(g,color) for g in groups]},
             'footer':footer(items,color)}
 
+def home_messages(raw, items):
+    """Compact navigation, separate from the first-follow onboarding message."""
+    routes = dict(items)
+    status = next((line for line in raw.splitlines() if line.startswith('目前：')), '選一個模式，開始操作')
+    cards = []
+    for title, subtitle, choices in [
+        ('今天想看哪一種？', status, [
+            ('百家實戰', '百家 AI'), ('539 看盤', '539 AI'),
+            ('賓果看盤', 'Bingo AI'), ('網頁操作', routes['進入實戰'])]),
+        ('會員與服務', '開通、教學與聯絡，都在這裡', [
+            ('會員中心', '會員中心'), ('開通／綁定', '怎麼開通'),
+            ('操作教學', '使用教學'), ('找小幫手', routes['找小幫手'])]),
+    ]:
+        card = bubble('home', title, [[subtitle]], choices, 1, 1)
+        card['header']['backgroundColor'] = '#AD361A'
+        card['header']['contents'] = [txt('甦贏 SUYING', 'xs', '#FFE1CA', True),
+                                      txt(title, 'xl', '#FFFFFF', True)]
+        card['body']['paddingAll'] = '12px'
+        cards.append(card)
+    cards[0]['body']['contents'].append(txt('向左滑看會員與服務 →', 'xs', MUTED))
+    return [{'type':'flex', 'altText':'甦贏主選單｜百家・539・賓果｜會員與服務',
+             'contents':{'type':'carousel','contents':cards}}]
+
+
 def build_messages(text,quick_items=None):
     raw=public_text(text);key=theme(raw)
+    routes = dict(quick_items or [])
+    if raw.startswith(('歡迎來到甦贏', '🎲 甦贏')) and all(
+            label in routes for label in ('百家實戰', '進入實戰', '找小幫手')):
+        return home_messages(raw, quick_items)
     first=raw.split('\n',1)[0].strip('【】 ')
     title=re.sub(r'^[^\w\u4e00-\u9fff]+','',first)
     title=re.sub(r'\s*V(?:15|2(?:\.\d+)?).*$', '',title).strip()
@@ -124,6 +152,8 @@ def build_messages(text,quick_items=None):
     # Oversized content retains the existing text transport rather than losing detail.
     if len(messages)>5 or any(len(json.dumps(m,ensure_ascii=False).encode())>48000 for m in messages):
         messages=[{'type':'text','text':raw[i:i+4800]} for i in range(0,len(raw),4800)][:5]
-    if quick_items and not raw.startswith('🎲 甦贏'):
+    # Flex footers already contain these actions. Only text fallback needs chips.
+    if quick_items and messages[-1]['type'] == 'text':
         messages[-1]['quickReply']={'items':[{'type':'action','action':action(a,b)} for a,b in quick_items[:13]]}
     return messages
+
