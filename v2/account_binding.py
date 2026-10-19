@@ -2,9 +2,10 @@
 import store,account_access
 
 def handle(g,text,uid,token):
+    from point_engine import COMMANDS as POINT_COMMANDS
     state=store.get_state(uid);pending=state.get('account_binding')
     buttons=[('取消綁定','取消綁定'),('個人中心','會員中心')]
-    if text in ('小幫手','找小幫手','聯絡客服','綁定/疑問','怎麼開通','開通教學','使用教學','取消綁定','主選單','回主選單','開始','首頁','選單','會員中心','進入實戰','開啟甦贏','百家 AI','539 AI','Bingo AI','免費體驗'):
+    if text in POINT_COMMANDS or text in ('小幫手','找小幫手','聯絡客服','綁定/疑問','怎麼開通','開通教學','使用教學','取消綁定','主選單','回主選單','開始','首頁','選單','會員中心','進入實戰','開啟甦贏','百家 AI','539 AI','Bingo AI','免費體驗'):
         if 'account_binding' in state:
             state.pop('account_binding');store.put_state(uid,state)
         if text=='取消綁定':g.reply_text(token,'已取消綁定。',[('綁定帳號','綁定帳號')]);return True
@@ -29,5 +30,6 @@ def handle(g,text,uid,token):
         state['account_binding']={'stage':'confirm','name':name};store.put_state(uid,state)
         g.reply_text(token,'確認綁定帳號：'+name+'\n請確認拼字，綁定後需由小幫手協助更換。',[('確認綁定','確認綁定')]+buttons);return True
     return False
+
 
 

@@ -17,6 +17,8 @@ SETTINGS = '__suying_home_settings__'
 COMMANDS = {'傳路單截圖','換房後重傳','539完整資訊','539逐號依據','驗證5','539完整紀錄','教學百家','教學539','教學賓果','主選單','百家 AI','539 AI','Bingo AI','今日陪跑','今日追蹤','驗證7','驗證30','驗證90','即時盤','20期','50期','100期','會員中心','免費體驗','我的紀錄','使用教學','繼續本桌','詳細分析','撤回上一筆','修正本桌','確認修正','取消更新','更新本桌','換新桌','結束分析','匯入牌路','匯入莊','匯入閒','匯入和','撤回匯入','清空匯入','確認開始','完成匯入','修正牌路','莊','閒','和','紅','藍','查看待確認牌路','開始新桌'}
 
 COMMANDS.update({'賓果分析依據', '賓果上期開獎'})
+from point_engine import COMMANDS as POINT_COMMANDS, clear_draft as clear_point_draft
+COMMANDS.update(POINT_COMMANDS)
 
 def hashed(token): return hashlib.sha256(token.encode()).hexdigest()
 def session_key(token): return 'web:session:'+hashed(token)
@@ -176,6 +178,7 @@ def install(g):
             if mode in ('baccarat','539','bingo'):membership.set_mode(uid,mode)
             if membership.get_mode(uid)=='baccarat':ba.ensure_user(uid)
             if cmd=='開始新桌':
+                clear_point_draft(uid)
                 experience.clear_live_table(uid)
                 out={'replies':[{'text':'百家實戰｜傳目前路單，核對後開始。','buttons':[]}]}
                 store.put_state(key,out)
@@ -275,6 +278,7 @@ def install(g):
             response.headers['X-Content-Type-Options']='nosniff'
             response.headers['Content-Security-Policy']="default-src 'self'; img-src 'self' data: blob:; style-src 'self'; script-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
         return response
+
 
 
 

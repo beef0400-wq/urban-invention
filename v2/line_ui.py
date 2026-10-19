@@ -19,7 +19,7 @@ def theme(text):
     if '會員' in first or '體驗' in first:return 'member'
     if '539' in first or '母盤' in first or '驗證' in first:return '539'
     if 'Bingo' in first or '賓果' in first:return 'bingo'
-    if any(k in first for k in ('百家','詳細分析','辨識','匯入','牌路')):return 'baccarat'
+    if any(k in first for k in ('百家','詳細分析','辨識','匯入','牌路','點數','打法','天門')):return 'baccarat'
     return 'home'
 
 def public_text(text):
@@ -143,7 +143,12 @@ def build_messages(text,quick_items=None):
         groups=[['百家實戰','傳路單 → 核對 → 即時分析'],['539 好懂看盤','每日母盤、核心號碼與開獎驗證'],['賓果看盤','近20／50／100期的真實資料統計'],
                 [line for line in raw.splitlines() if line.startswith('目前：')]]
     pages=[groups] if raw.startswith('🎲 甦贏') or raw.startswith('甦贏｜三種模式') else [groups[i:i+2] for i in range(0,len(groups),2)]
-    bubbles=[bubble(key,title,g,quick_items if i==0 else [('主選單','主選單')],i+1,len(pages)) for i,g in enumerate(pages)]
+    bubbles=[]
+    for i,g in enumerate(pages):
+        items=list(quick_items or []) if i==0 else [('主選單','主選單')]
+        if any('點數引擎' in line for group in g for line in group):
+            items=[('點數／打法','點數引擎'),('天門公式','天門公式')]+items
+        bubbles.append(bubble(key,title,g,items,i+1,len(pages)))
     messages=[]
     for i in range(0,len(bubbles),4):
         group=bubbles[i:i+4]
@@ -156,4 +161,5 @@ def build_messages(text,quick_items=None):
     if quick_items and messages[-1]['type'] == 'text':
         messages[-1]['quickReply']={'items':[{'type':'action','action':action(a,b)} for a,b in quick_items[:13]]}
     return messages
+
 

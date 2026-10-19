@@ -12,6 +12,7 @@ import verification
 import v2_flows
 import line_ui
 import experience
+import point_engine
 import admin_experience, account_access, account_binding
 import web_portal
 import sys
@@ -24,7 +25,7 @@ from legacy import baccarat
 from road_vision import parse_baccarat_road_image
 
 app = Flask(__name__)
-APP_VERSION = "SUYING-V2.16-BEAD-REGION-FIX"
+APP_VERSION = "SUYING-V2.17-POINT-ENGINE"
 app.logger.setLevel(logging.INFO)
 _LINE_TRANSPORT = threading.local()
 OFFICIAL_SITE_URL = "https://offtable-lab.zippygrebe11.chatgpt.site"
@@ -101,7 +102,7 @@ def fetch_line_image(message_id):
     return r.content
 
 def baccarat_live_buttons():
-    return [("🔴紅", "莊"), ("🔵藍", "閒"), ("🟢和", "和"), ("詳細分析", "詳細分析"), ("撤回上一筆", "撤回上一筆"), ("補漏／修正", "修正本桌"), ("主選單", "主選單"), ("結束本桌", "結束分析")]
+    return [("🔴紅", "莊"), ("🔵藍", "閒"), ("🟢和", "和"), ("點數／打法", "點數引擎"), ("詳細分析", "詳細分析"), ("撤回上一筆", "撤回上一筆"), ("補漏／修正", "修正本桌"), ("主選單", "主選單"), ("結束本桌", "結束分析")]
 
 def _road_preview(seq, limit=36):
     mapping = {"莊": "🔴", "閒": "🔵", "和": "🟢"}
@@ -157,6 +158,7 @@ def mode_menu(mode):
     if mode == "baccarat":
         return [
             ("傳路單截圖", "傳路單截圖"), ("手動匯入", "匯入牌路"),
+            ("點數／打法", "點數引擎"), ("天門公式", "天門公式"),
             ("詳細分析", "詳細分析"), ("結束本桌", "結束分析"),
             ("539 AI", "539 AI"), ("Bingo AI", "Bingo AI"),
         ]
@@ -280,6 +282,7 @@ def _handle_global_text(event, text, user_id, reply_token):
         return True
 
     if normalized in HOME_COMMANDS:
+        point_engine.clear_draft(user_id)
         user = baccarat.ensure_user(user_id)
         if user.get('pending_flow') is not None or user.get('pending_main_result') is not None:
             baccarat.update_user(user_id, pending_flow=None, pending_main_result=None)
@@ -329,7 +332,7 @@ def _handle_global_text(event, text, user_id, reply_token):
 
     if normalized in {'使用教學','教學百家','教學539','教學賓果'}:
         guides={
-            '教學百家': '百家實戰｜操作教學\n\n① 進桌後傳完整路單截圖，或手動輸入。\n② 核對紅／藍／和，按「確認開始」。\n③ 每局開出後只按一次紅／藍／和。\n④ 記錯按「撤回上一筆」；漏記按「補漏／修正」。\n\n怎麼看分析？\n先看本輪觀察、訊號指數與風險；想看每項理由再按「詳細分析」。分數是規則訊號，不是勝率。\n換桌時重新帶入目前路單。',
+            '教學百家': '百家實戰｜操作教學\n\n① 進桌後傳完整路單截圖，或手動輸入。\n② 核對紅／藍／和，按「確認開始」。\n③ 每局開出後只按一次紅／藍／和。\n④ 記錯按「撤回上一筆」；漏記按「補漏／修正」。\n⑤ 點「點數／打法」→「設定點數」，依序選區間、打法、目標比例；完成才儲存。目標比例是計算參數，不是獲利保證。\n\n怎麼看分析？\n先看本輪觀察、訊號指數與風險；想看每項理由再按「詳細分析」。分數是規則訊號，不是勝率。\n換桌時重新帶入目前路單。',
             '教學539':'539｜怎麼使用\n\n① 點進539，先看「推薦5碼」。\n② 核對適用開獎日；週日或當天截止後會顯示下期日期。\n③ 想看其他選號，按「更多選號」。\n④ 想知道理由，按「為何選這些號碼」。\n\n「過去推薦紀錄」才是舊分析與已開出的號碼，不是本次推薦。歷史統計不能保證下期結果。',
             '教學賓果':'賓果｜怎麼使用\n\n① 點進賓果，先看「推薦5碼」。\n② 核對資料時間，這組是下一次開獎的參考。\n③ 開出新一期後，按「更新推薦」。\n④「上期開獎」是已經開出的號碼。\n\n想研究再點「選號原因」。裡面的20／50／100期，是拿多少次過去開獎來統計，不是要你連玩幾期，也不是預測能用幾期。歷史統計不能保證下期結果。'}
         if normalized=='使用教學':
@@ -446,6 +449,8 @@ def _process_event(event):
     text = (message.get("text") or "").strip()
     if account_binding.handle(sys.modules[__name__],text,user_id,reply_token):
         return
+    if point_engine.handle(sys.modules[__name__],text,user_id,reply_token):
+        return
     if admin_experience.handle(sys.modules[__name__],text,user_id,reply_token):
         return
     if v2_flows.handle(sys.modules[__name__], event, text, user_id, reply_token):
@@ -496,6 +501,7 @@ VERIFICATION_SCHEDULER = scheduled_verification.start()
 if __name__ == "__main__":
     membership.init_db()
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", "10000")))
+
 
 
 

@@ -1419,6 +1419,9 @@ def decision_card(user, analysis):
     road = main_only(user.get("current_road", []))
     preview = road_to_text(road[-24:], 24) if road else "—"
     m = analysis.get("metrics", {})
+    points = calculate_points(user, analysis)
+    point_line = (f"打法：{user.get('play_mode') or '標準'}｜本輪參考：{points['text']}"
+                  if points else '點數尚未設定，可按「點數／打法」。')
     return (
         "🧠 百家 AI｜即時分析盤 V2\n\n"
         f"🎯 綜合判讀：{headline}\n"
@@ -1437,6 +1440,7 @@ def decision_card(user, analysis):
         f"莊 {m.get('莊',0)}｜閒 {m.get('閒',0)}｜和 {m.get('和',0)}\n"
         f"交錯率 {m.get('交錯率',0)}%｜平均段長 {m.get('平均段長',0)}｜最長連續 {m.get('最長連續',0)}\n"
         f"最近牌路：{preview}\n\n"
+        f"💰 點數引擎\n{point_line}\n點數參考不代表勝率或獲利保證。\n\n"
         "下一局開完後，只要按一次【🔴紅／🔵藍／🟢和】，AI 會立即重算。\n"
         "需要更多資料再按【詳細分析】。"
     ).replace("莊", "紅").replace("閒", "藍")
@@ -1508,7 +1512,7 @@ def detail_card(user, analysis):
         "💰 點數引擎\n"
         f"點數區間：{POINT_CONFIG.get(user.get('point_range'), {}).get('label', '尚未設定')}\n"
         f"打法模式：{user.get('play_mode') or '尚未設定'}\n"
-        f"期望獲利：{user.get('target_profit') or '尚未設定'}\n"
+        f"目標比例：{user.get('target_profit') or '尚未設定'}（計算參數，非獲利保證）\n"
         f"參考點數：{point_text}\n"
         f"{points['coef_note'] if points else ''}\n\n"
         "━━━━━━━━━━━━━━━\n\n"
@@ -2144,3 +2148,4 @@ init_db()
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", "5000")))
+
