@@ -24,7 +24,7 @@ from legacy import baccarat
 from road_vision import parse_baccarat_road_image
 
 app = Flask(__name__)
-APP_VERSION = "SUYING-V2.15-RECOMMENDATION-FIRST"
+APP_VERSION = "SUYING-V2.16-BEAD-REGION-FIX"
 app.logger.setLevel(logging.INFO)
 _LINE_TRANSPORT = threading.local()
 OFFICIAL_SITE_URL = "https://offtable-lab.zippygrebe11.chatgpt.site"
@@ -496,6 +496,7 @@ VERIFICATION_SCHEDULER = scheduled_verification.start()
 if __name__ == "__main__":
     membership.init_db()
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", "10000")))
+
 
 
 

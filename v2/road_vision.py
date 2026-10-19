@@ -252,6 +252,29 @@ def _reconstruct(comp, xs, ys):
     return seq, mode, structural_conf
 
 
+def _six_row_regions(comp, size):
+    """Isolate six regularly spaced rows from adjacent UI legend symbols.
+
+    Do not slice a larger regular grid into six rows: that would hide records.
+    A neighbouring row is excluded only when separated by a non-grid gap.
+    """
+    tol = max(2, size*.23)
+    ys = _cluster_axis([p['y'] for p in comp], tol)
+    for start in range(max(0, len(ys)-5)):
+        rows = ys[start:start+6]
+        gaps = np.diff(rows)
+        if len(rows) != 6 or min(gaps) <= 0 or max(gaps)/min(gaps) > 1.18:
+            continue
+        pitch = float(np.median(gaps))
+        if not .85*size <= pitch <= 2.3*size:
+            continue
+        if start and rows[0]-ys[start-1] <= pitch*1.3:
+            continue
+        if start+6 < len(ys) and ys[start+6]-rows[-1] <= pitch*1.3:
+            continue
+        yield [p for p in comp if rows[0]-tol <= p['y'] <= rows[-1]+tol]
+
+
 def _bead_candidates(points, width, height, masks):
     """Separate symbol scales before grouping; never merge the derived roads.
 
@@ -266,7 +289,9 @@ def _bead_candidates(points, width, height, masks):
         size = max(seed['w'], seed['h'])
         group = [dict(p, x=p.get('bx',p['x']), y=p.get('by',p['y'])) for p in square
                  if .86*size <= max(p['w'], p['h']) <= 1.16*size]
-        for comp in _components_at_distance(group, size*2.4):
+        regions = (region for connected in _components_at_distance(group, size*2.4)
+                   for region in _six_row_regions(connected, size))
+        for comp in regions:
             key = tuple(sorted((round(p['x']), round(p['y'])) for p in comp))
             if key in seen or len(comp) < 15:
                 continue
@@ -301,6 +326,7 @@ def _bead_candidates(points, width, height, masks):
             radius=max(3,round(size*.43))
             yy,xx=np.ogrid[-radius:radius+1,-radius:radius+1]
             disk=xx*xx+yy*yy<=radius*radius
+            ring=disk & (xx*xx+yy*yy >= (radius*.70)**2)
             for ci,cx in enumerate(xs):
                 for ri,cy in enumerate(ys):
                     ix,iy=round(cx),round(cy)
@@ -309,7 +335,16 @@ def _bead_candidates(points, width, height, masks):
                     coverage={label:np.count_nonzero(mask[iy-radius:iy+radius+1,ix-radius:ix+radius+1][disk])/np.count_nonzero(disk)
                               for label,mask in masks.items()}
                     ranked=sorted(coverage,key=coverage.get,reverse=True)
-                    if coverage[ranked[0]]<.38:
+                    # Chinese glyphs and pair badges obscure disk centres.
+                    # Confirm a weak centre using its own outer ring, never
+                    # a neighbouring cell or majority colour of a column.
+                    primary = ranked[0]
+                    ring_coverage={label:np.count_nonzero(mask[iy-radius:iy+radius+1,ix-radius:ix+radius+1][ring])/np.count_nonzero(ring)
+                                   for label,mask in masks.items()}
+                    overlay_confirmed=(coverage[primary]>=.30 and
+                                       ring_coverage[primary]>=.50 and
+                                       max(v for k,v in ring_coverage.items() if k!=primary)<=.20)
+                    if coverage[primary]<.38 and not overlay_confirmed:
                         ended=True
                         continue
                     if ended or coverage[ranked[1]]>.20:
@@ -406,3 +441,4 @@ def parse_baccarat_road_image(image_bytes: bytes, min_main_results: int = 15) ->
         note = "珠盤路格數、間距或順序無法完整核對。請傳完整六列珠盤路，或使用手動輸入。"
 
     return RoadParseResult(accepted, confidence, seq, mode, len(comp), len(ys), len(xs), note)
+
