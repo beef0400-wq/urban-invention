@@ -137,6 +137,13 @@ def build_messages(text,quick_items=None):
     if len(title)>32:title=THEMES[key][0]
     groups=sections(raw)
     if groups and groups[0] and groups[0][0]==first and len(groups[0])==1:groups=groups[1:] or [['選一個功能開始。']]
+    if '即時分析盤' in raw:
+        observation=next((g for g in groups if any('綜合判讀：' in x for x in g)),None)
+        points=next((g for g in groups if any('點數引擎' in x for x in g)),None)
+        if observation and points:
+            groups=[observation,points]+[g for g in groups if g is not observation and g is not points
+                                        and not (len(g)==1 and '即時分析盤' in g[0])]
+            key='baccarat';title='百家實戰｜即時分析'
     # A visible native menu replaces the horizontally hidden quick-reply-only menu.
     if raw.startswith('🎲 甦贏'):
         title='今天想看哪個模式？';key='home'

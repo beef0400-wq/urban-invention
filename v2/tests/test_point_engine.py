@@ -247,6 +247,12 @@ def test_live_first_card_contains_points_and_only_one_result_input(clean):
     if first['type']=='carousel':first=first['contents'][0]
     body=json.dumps(first['body'],ensure_ascii=False)
     assert '天門公式' in body and '100 點' in body and '本輪觀察' in body
+    for prefix in ('已撤回上一筆更新。\n\n','已一次匯入牌路。\n\n'):
+        msgs=line_ui.build_messages(prefix+text,buttons)
+        card=msgs[0]['contents']
+        if card['type']=='carousel':card=card['contents'][0]
+        body=json.dumps(card['body'],ensure_ascii=False)
+        assert '100 點' in body and '本輪觀察' in body
     configure()
     assert store.get_state('points-user')['point_method']=='legacy'
     assert '即時分析盤' in clean[-1][0] and '打法：標準' in clean[-1][0]
