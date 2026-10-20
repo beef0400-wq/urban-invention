@@ -6,6 +6,7 @@ Tianmen amounts and transitions follow the owner-supplied five-stage rules.
 import membership
 import store
 import account_access
+from uuid import uuid4
 from legacy import baccarat as ba
 
 KEY = 'point_setup'
@@ -31,6 +32,54 @@ COMMANDS |= {'天門贏','天門輸','天門和','停止天門','撤回天門','
 TIANMEN_KEY = 'tianmen_tracker'
 
 
+def live_reminder(user, analysis):
+    state=store.get_state(user['line_user_id'])
+    tracker=state.get(TIANMEN_KEY) or {}
+    if state.get('point_method')=='tianmen' and tracker:
+        if not tracker['active']:
+            return '💰 點數引擎｜天門公式・'+tracker['plan']+'\n本輪已停止：'+tracker.get('reason','自行停止')+'\n點數提醒：停止，不再進關。'
+        return (f"💰 點數引擎｜天門公式・{tracker['plan']}\n"
+                f"目前第 {tracker['stage']+1} 注／5關｜本輪點數：{TIANMEN_PLANS[tracker['plan']][tracker['stage']]:,} 點\n"
+                '依上一輪顯示方向比對開獎更新；觀望、和局不進關。不是實際輸贏紀錄。')
+    points=ba.calculate_points(user,analysis)
+    return ('💰 點數引擎｜實戰提醒\n'
+            f"打法：{user.get('play_mode') or '尚未選擇'}｜區間：{ba.POINT_CONFIG.get(user.get('point_range'),{}).get('label','尚未設定')}\n"
+            f"本輪參考：{points['text'] if points else '按「點數／打法」設定'}")
+
+
+def observation_direction(user,analysis):
+    idx=analysis.get('signal_index',ba.signal_index_from_analysis(analysis))
+    if idx==0 or '暫停' in analysis.get('state','') or (analysis.get('signal','弱')=='弱' and analysis.get('risk','中') in ('中高','高')):
+        return None
+    return analysis.get('direction')
+
+
+def advance_live(user,result):
+    uid=user['line_user_id'];state=store.get_state(uid)
+    tracker=state.get(TIANMEN_KEY)
+    if state.get('point_method')!='tianmen' or not tracker or not tracker['active']:
+        return
+    direction=observation_direction(user,ba.analyze_v15(user))
+    if not direction or result=='和':return
+    if result==direction:
+        tracker.update(stage=0,losses=0)
+    else:
+        tracker['losses']+=1
+        if tracker['losses']>=5:
+            tracker.update(active=False,reason='五關方向比對未中，本輪結束')
+        else:tracker['stage']+=1
+    state[TIANMEN_KEY]=tracker;store.put_state(uid,state)
+
+
+def live_reply(g,token,uid,notice=''):
+    user=ba.ensure_user(uid)
+    if user.get('analysis_active'):
+        g.reply_text(token,ba.decision_card(user,ba.analyze_v15(user)),g.baccarat_live_buttons())
+    else:
+        g.reply_text(token,'百家實戰｜點數／打法已套用\n\n'+notice+'\n傳本桌路單，開始後點數會直接顯示在實戰分析卡。',
+                     [('傳路單截圖','傳路單截圖'),('手動匯入','匯入牌路'),('點數／打法','點數引擎')])
+
+
 def tianmen_buttons():
     return [(f'{name}｜{points[0]:,}點起','天門方案 '+name)
             for name,points in TIANMEN_PLANS.items()] + [('回點數引擎','點數引擎')]
@@ -40,7 +89,7 @@ def tianmen_card(name=None):
     if name is None:
         return ('百家實戰｜天門公式\n\n原版五關點數表\n'
                 '選一個方案，查看天一至天五的點數與五關累計。\n\n'
-                '贏：回第1注。輸：下一關。和：原關、原點數繼續。\n五關全輸或自行停止才結束。\n選方案後按開始；不會自動下注。')
+                '套用後直接在實戰卡顯示點數。\n回填紅／藍／和，比對上一輪方向：中回第1注，未中進下一關，和與觀望保留。\n五關未中或自行停止才結束；不會自動下注。')
     points=TIANMEN_PLANS[name]
     rows='\n'.join(f'{label}：{amount:,} 點' for label,amount in
                    zip(('天一','天二','天三','天四','天五'),points))
@@ -50,28 +99,6 @@ def tianmen_card(name=None):
             '\n點數配置不會改變遊戲本身的機率，也不保證結果。')
 
 
-def tracker_reply(g, token, tracker, notice=''):
-    if not tracker:
-        g.reply_text(token,tianmen_card(),tianmen_buttons())
-        return
-    name=tracker['plan']
-    active=tracker['active']
-    text=f'百家實戰｜天門公式・{name}\n\n'
-    if active:
-        stage=tracker['stage']
-        text+=f'目前第 {stage+1} 注／共5關\n本關點數：{TIANMEN_PLANS[name][stage]:,} 點\n'
-    else:
-        text+='已停止：'+tracker.get('reason','自行停止')+'\n'
-    text+=f"本輪已輸：{tracker['losses']} 關（和局不計入、不歸零）\n"
-    text+='\n'+notice if notice else ''
-    text+='\n\n依你實際輸贏按一次；紅／藍開獎不等於你的輸贏。\n僅記錄關卡，不操作帳戶餘額、不自動下注。'
-    buttons=([('本局贏','天門贏'),('本局輸','天門輸'),('和局','天門和'),('停止','停止天門')] if active else [])
-    if tracker.get('previous'):
-        buttons.append(('按錯撤回','撤回天門'))
-    buttons += [('查看五關表','天門方案 '+name),('主選單','主選單')]
-    g.reply_text(token,text,buttons)
-
-
 def handle_tianmen(g,text,uid,token,state):
     tracker=state.get(TIANMEN_KEY)
     if text == '天門選方案':
@@ -79,42 +106,27 @@ def handle_tianmen(g,text,uid,token,state):
         return
     if text.startswith('天門方案 '):
         name=text.split(' ',1)[1]
-        g.reply_text(token,tianmen_card(name),[('開始這個方案','開始天門 '+name),('目前進度','天門進度'),('其他方案','天門選方案')])
+        g.reply_text(token,tianmen_card(name),[('套用到實戰','開始天門 '+name),('回實戰','繼續本桌'),('其他方案','天門選方案')])
         return
     if text.startswith('開始天門 '):
-        if tracker and tracker['active']:
-            tracker_reply(g,token,tracker,'已有進行中的方案；未重置。若要換方案，請先停止。')
-            return
-        tracker={'plan':text.split(' ',1)[1],'stage':0,'losses':0,'active':True}
+        name=text.split(' ',1)[1]
+        if state.get('point_method')=='tianmen' and tracker and tracker['active'] and tracker['plan']==name:
+            live_reply(g,token,uid);return
+        tracker={'plan':name,'stage':0,'losses':0,'active':True,'config_id':uuid4().hex}
+        state['point_method']='tianmen'
     elif text in {'天門公式','天門進度'}:
-        tracker_reply(g,token,tracker)
+        g.reply_text(token,tianmen_card(),tianmen_buttons()+[('回實戰','繼續本桌'),('停止天門提醒','停止天門')])
         return
     elif not tracker:
-        tracker_reply(g,token,None)
+        g.reply_text(token,tianmen_card(),tianmen_buttons())
         return
-    elif text == '撤回天門':
-        if tracker.get('previous'):
-            tracker=tracker['previous']
-    elif not tracker['active']:
-        tracker_reply(g,token,tracker,'本輪已停止，未再計算。')
-        return
-    else:
-        previous={k:v for k,v in tracker.items() if k!='previous'}
-        tracker=dict(previous,previous=previous)
-        if text == '停止天門':
-            tracker.update(active=False,reason='自行停止')
-        elif text == '天門贏':
-            tracker.update(stage=0,losses=0)
-        elif text == '天門輸':
-            tracker['losses']+=1
-            if tracker['losses']==5:
-                tracker.update(active=False,reason='五關全輸，本輪結束')
-            else:
-                tracker['stage']+=1
-        # A tie leaves stage and loss count unchanged.
+    elif text == '停止天門':
+        tracker.update(active=False,reason='自行停止')
+    else: # Old detached cards must not change the live reminder.
+        live_reply(g,token,uid,'已整合到實戰，請使用紅／藍／和與撤回上一筆。');return
     state[TIANMEN_KEY]=tracker
     store.put_state(uid,state)
-    tracker_reply(g,token,tracker)
+    live_reply(g,token,uid,'已套用天門公式・'+tracker['plan'])
 
 
 def clear_draft(uid):
@@ -175,7 +187,7 @@ def handle(g, text, uid, token):
     user = ba.ensure_user(uid)
     if text in ENTRY:
         clear_draft(uid)
-        g.reply_text(token,summary(user),menu_buttons(user))
+        g.reply_text(token,'百家實戰｜點數／打法\n\n'+live_reminder(user,ba.analyze_v15(user))+'\n\n設定完成會直接回實戰，紅／藍／和只需回填一次。',menu_buttons(user))
         return True
     if text.startswith(('天門','開始天門 ','停止天門','撤回天門')):
         clear_draft(uid)
@@ -211,8 +223,9 @@ def handle(g, text, uid, token):
                 draft.get('point_range') not in ba.POINT_CONFIG or draft.get('play_mode') not in ba.PLAY_MODES):
             g.reply_text(token,'百家實戰｜請先完成區間與打法設定。',[('設定點數','點數配置')]);return True
         user = ba.update_user(uid,point_range=draft['point_range'],play_mode=draft['play_mode'],target_profit=target)
+        state=store.get_state(uid);state['point_method']='legacy';store.put_state(uid,state)
         clear_draft(uid)
-        g.reply_text(token,'百家實戰｜點數設定完成\n\n'+summary(user).split('\n\n',1)[1],menu_buttons(user))
+        live_reply(g,token,uid,'已套用'+draft['play_mode']+'打法。')
         return True
     state[KEY] = draft
     store.put_state(uid,state)

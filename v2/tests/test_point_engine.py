@@ -106,7 +106,7 @@ def test_mode_shortcut_uses_saved_range_but_requires_last_step():
 def test_tianmen_does_not_activate_invented_rules(clean):
     paid();configure();send('天門公式')
     assert '五關點數表' in clean[-1][0]
-    assert '五關全輸' in clean[-1][0]
+    assert '五關未中' in clean[-1][0]
     assert ba.get_user('points-user')['play_mode']=='標準'
 
 
@@ -184,42 +184,47 @@ def tracker():
 
 
 @pytest.mark.parametrize('plan',point_engine.TIANMEN_PLANS)
-def test_tianmen_five_losses_stop_ties_do_not_reset(plan,clean):
-    paid();send('開始天門 '+plan)
+def test_tianmen_five_losses_stop_ties_do_not_reset(plan,clean,monkeypatch):
+    paid();ba.update_user('points-user',current_road=list('莊閒'*10),analysis_active=True,last_prediction='莊')
+    monkeypatch.setattr(point_engine,'observation_direction',lambda user,analysis:'莊')
+    send('開始天門 '+plan)
     for i in range(5):
         assert tracker()['stage']==i and tracker()['active']
-        send('天門和')
+        send('和')
         assert tracker()['stage']==i and tracker()['losses']==i
-        send('天門輸')
+        send('閒')
     assert not tracker()['active'] and tracker()['losses']==5
     before=tracker()
-    send('天門輸');send('天門贏')
+    send('閒');send('莊')
     assert tracker()==before
-    assert '五關全輸' in clean[-1][0]
+    assert '五關方向比對未中' in clean[-1][0]
 
 
-def test_tianmen_win_resets_without_stop_and_preserves_legacy():
+def test_tianmen_win_resets_without_stop_and_preserves_legacy(monkeypatch):
     paid();configure()
-    before=ba.get_user('points-user').copy()
+    ba.update_user('points-user',current_road=list('莊閒'*10),analysis_active=True,last_prediction='莊')
+    monkeypatch.setattr(point_engine,'observation_direction',lambda user,analysis:'莊')
     send('開始天門 賓士')
     for _ in range(8):
-        for _ in range(4): send('天門輸')
-        send('天門贏')
+        for _ in range(4): send('閒')
+        send('莊')
         assert tracker()['stage']==0 and tracker()['losses']==0 and tracker()['active']
-    assert ba.get_user('points-user')==before
+    assert ba.get_user('points-user')['play_mode']=='標準'
     send('主選單');send('天門公式')
     assert tracker()['active']
     send('停止天門')
     assert not tracker()['active']
 
 
-def test_tianmen_start_guard_undo_and_restart():
-    paid();send('開始天門 豐田');send('天門輸')
-    send('開始天門 勞斯')
+def test_tianmen_start_guard_undo_and_restart(monkeypatch):
+    paid();ba.update_user('points-user',current_road=list('莊閒'*10),analysis_active=True,last_prediction='莊')
+    monkeypatch.setattr(point_engine,'observation_direction',lambda user,analysis:'莊')
+    send('開始天門 豐田');send('閒')
+    send('開始天門 豐田')
     assert tracker()['plan']=='豐田' and tracker()['stage']==1
-    send('撤回天門')
+    send('撤回上一筆')
     assert tracker()['stage']==0
-    send('撤回天門')
+    send('撤回上一筆')
     assert tracker()['stage']==0
     send('停止天門');send('開始天門 勞斯')
     assert tracker()['plan']=='勞斯' and tracker()['active']
@@ -228,3 +233,53 @@ def test_tianmen_start_guard_undo_and_restart():
 def test_tianmen_no_access_no_state():
     send('開始天門 賓士')
     assert point_engine.TIANMEN_KEY not in store.get_state('points-user')
+
+
+def test_live_first_card_contains_points_and_only_one_result_input(clean):
+    paid();ba.update_user('points-user',current_road=list('莊閒'*10),analysis_active=True)
+    send('開始天門 賓士')
+    text,buttons=clean[-1]
+    assert '即時分析盤' in text and '100 點' in text
+    assert {'莊','閒','和'} <= {cmd for _,cmd in buttons}
+    assert not {'天門贏','天門輸','天門和'} & {cmd for _,cmd in buttons}
+    messages=line_ui.build_messages(text,buttons)
+    first=messages[0]['contents']
+    if first['type']=='carousel':first=first['contents'][0]
+    body=json.dumps(first['body'],ensure_ascii=False)
+    assert '天門公式' in body and '100 點' in body and '本輪觀察' in body
+    configure()
+    assert store.get_state('points-user')['point_method']=='legacy'
+    assert '即時分析盤' in clean[-1][0] and '打法：標準' in clean[-1][0]
+
+
+def test_old_detached_buttons_no_longer_advance_and_observation_holds(monkeypatch):
+    paid();ba.update_user('points-user',current_road=list('莊閒'*10),analysis_active=True)
+    send('開始天門 賓士');before=tracker()
+    for command in ('天門輸','天門贏','天門和','撤回天門'):send(command)
+    assert tracker()==before
+    monkeypatch.setattr(point_engine,'observation_direction',lambda user,analysis:None)
+    send('莊');send('閒')
+    assert tracker()==before
+
+
+def test_undo_does_not_replace_a_newly_selected_plan(monkeypatch):
+    paid();ba.update_user('points-user',current_road=list('莊閒'*10),analysis_active=True)
+    monkeypatch.setattr(point_engine,'observation_direction',lambda user,analysis:'莊')
+    send('開始天門 賓士');send('閒');send('開始天門 豐田');send('撤回上一筆')
+    assert tracker()['plan']=='豐田' and tracker()['stage']==0
+
+
+def test_live_web_tianmen_flow(monkeypatch):
+    monkeypatch.setattr(g,'reply_text',lambda token,text,quick_items=None:web_portal.CAPTURE.get().append((text,quick_items)))
+    uid='web-live-points';paid(uid)
+    ba.update_user(uid,current_road=list('莊閒'*10),analysis_active=True)
+    monkeypatch.setattr(point_engine,'observation_direction',lambda user,analysis:'莊')
+    with g.app.test_client() as client:
+        client.get(web_portal.issue_link(uid),base_url=web_portal.ORIGIN)
+        csrf=client.get('/api/portal',base_url=web_portal.ORIGIN).json['csrf']
+        for i,command in enumerate(('開始天門 賓士','閒','和','撤回上一筆','莊')):
+            response=client.post('/api/command',base_url=web_portal.ORIGIN,
+                headers={'X-CSRF-Token':csrf},json={'command':command,'mode':'baccarat','request_id':f'live-points-request-{i}'})
+            assert response.status_code==200
+            assert response.json['replies'][0]['buttons']
+        assert store.get_state(uid)[point_engine.TIANMEN_KEY]['stage']==0

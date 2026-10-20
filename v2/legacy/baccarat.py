@@ -1395,6 +1395,7 @@ def point_config_card(user):
 # Cards
 # =========================
 def decision_card(user, analysis):
+    from point_engine import live_reminder
     evidence = analysis.get("evidence") or build_evidence(user, analysis)
     consensus = analysis.get("consensus") or evidence_consensus(evidence)
     idx = analysis.get("signal_index", signal_index_from_analysis(analysis))
@@ -1428,6 +1429,7 @@ def decision_card(user, analysis):
         f"📶 訊號指數：{idx}/100（{signal}）\n"
         f"⚠️ 風險：{risk}\n"
         f"📈 路況：{analysis.get('road_name','—')}\n\n"
+        f"{live_reminder(user,analysis)}\n\n"
         f"目前觀察：{plain_observation}\n"
         f"主要依據：{plain_reason}\n"
         "訊號限制：這些是歷史牌路的相關規則，不能保證下一局。\n\n"
@@ -1440,12 +1442,13 @@ def decision_card(user, analysis):
         f"莊 {m.get('莊',0)}｜閒 {m.get('閒',0)}｜和 {m.get('和',0)}\n"
         f"交錯率 {m.get('交錯率',0)}%｜平均段長 {m.get('平均段長',0)}｜最長連續 {m.get('最長連續',0)}\n"
         f"最近牌路：{preview}\n\n"
-        f"💰 點數引擎\n{point_line}\n點數參考不代表勝率或獲利保證。\n\n"
+        "點數參考不代表勝率或獲利保證。\n\n"
         "下一局開完後，只要按一次【🔴紅／🔵藍／🟢和】，AI 會立即重算。\n"
         "需要更多資料再按【詳細分析】。"
     ).replace("莊", "紅").replace("閒", "藍")
 
 def detail_card(user, analysis):
+    from point_engine import live_reminder
     points = calculate_points(user, analysis)
     point_text = points["text"] if points else "尚未設定"
     details = "\n".join([f"・{x}" for x in analysis["match_details"]]) if analysis["match_details"] else "・目前無明顯重複樣本"
@@ -1509,12 +1512,7 @@ def detail_card(user, analysis):
         f"平均段長：{analysis['metrics']['平均段長']}\n"
         f"最長連續：{analysis['metrics']['最長連續']}\n\n"
         "━━━━━━━━━━━━━━━\n\n"
-        "💰 點數引擎\n"
-        f"點數區間：{POINT_CONFIG.get(user.get('point_range'), {}).get('label', '尚未設定')}\n"
-        f"打法模式：{user.get('play_mode') or '尚未設定'}\n"
-        f"目標比例：{user.get('target_profit') or '尚未設定'}（計算參數，非獲利保證）\n"
-        f"參考點數：{point_text}\n"
-        f"{points['coef_note'] if points else ''}\n\n"
+        f"{live_reminder(user,analysis)}\n\n"
         "━━━━━━━━━━━━━━━\n\n"
         "📈 本輪表現\n"
         f"本輪紀錄：{user.get('round_win', 0)}/{total_round}（{rate}%）\n"
@@ -1563,6 +1561,8 @@ def settlement_card(user):
 # Flow helpers
 # =========================
 def record_main_result(user, line_user_id, main_result):
+    from point_engine import advance_live
+    advance_live(user,main_result)
     road = user.get("current_road", [])
     prior_prediction = user.get("last_prediction")
     actual_for_score = main_result if main_result in ["莊", "閒"] else None

@@ -6,7 +6,11 @@ SNAPSHOT_KEYS=('current_road','tie_count','high_count','low_count','banker_pair_
  'analysis_active','imported_ready','pending_flow','pending_main_result','last_prediction','last_treasure_round',
  'round_win','round_loss','win_streak','loss_streak','max_win_streak','max_loss_streak')
 
-def snapshot(user):return deepcopy({k:user.get(k) for k in SNAPSHOT_KEYS})
+def snapshot(user):
+    data=deepcopy({k:user.get(k) for k in SNAPSHOT_KEYS})
+    state=store.get_state(user['line_user_id'])
+    data['_point_tracker']=deepcopy(state.get('tianmen_tracker'))
+    return data
 
 def home_progress(uid):
     user=ba.get_user(uid) or {};state=store.get_state(uid)
@@ -63,6 +67,10 @@ def apply_road(uid,seq,kind):
 def undo(uid):
     state=store.get_state(uid);old=state.pop('undo',None)
     if not old:return '百家 AI｜沒有可撤回的更新\n\n尚未回填新局，或上一筆已撤回。'
+    prior=old.pop('_point_tracker',None)
+    current=state.get('tianmen_tracker') or {}
+    if prior and prior.get('config_id') and prior.get('config_id')==current.get('config_id'):
+        state['tianmen_tracker']=prior
     user=ba.update_user(uid,**old);state.pop('pending',None);state['road']=user.get('current_road') or [];store.put_state(uid,state)
     store.record(uid,'baccarat',{'kind':'撤回上一筆','sequence':state['road']})
     return '已撤回上一筆更新。\n\n'+ba.decision_card(user,ba.analyze_v15(user))
@@ -77,3 +85,4 @@ def clear_live_table(uid):
     state=store.get_state(uid)
     for key in ('road','pending','undo'):state.pop(key,None)
     store.put_state(uid,state)
+
