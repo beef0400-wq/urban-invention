@@ -105,8 +105,29 @@ def test_mode_shortcut_uses_saved_range_but_requires_last_step():
 
 def test_tianmen_does_not_activate_invented_rules(clean):
     paid();configure();send('天門公式')
-    assert '未啟用' in clean[-1][0]
+    assert '五關點數表' in clean[-1][0]
+    assert '五關全輸' in clean[-1][0]
     assert ba.get_user('points-user')['play_mode']=='標準'
+
+
+@pytest.mark.parametrize('name,amounts,total',[
+    ('豐田',(50,150,350,750,1550),2850),
+    ('賓士',(100,300,700,1500,3100),5700),
+    ('保時捷',(300,900,2100,4500,9300),17100),
+    ('法拉利',(500,1500,3500,7500,15500),28500),
+    ('勞斯',(1000,3000,7000,15000,31000),57000),
+])
+def test_owner_table_exact_and_read_only(name,amounts,total,clean):
+    paid();configure()
+    before=ba.get_user('points-user').copy()
+    send('天門方案 '+name)
+    assert point_engine.TIANMEN_PLANS[name]==amounts
+    assert sum(amounts)==total
+    assert f'五關累計：{total:,} 點' in clean[-1][0]
+    for label,amount in zip(('天一','天二','天三','天四','天五'),amounts):
+        assert f'{label}：{amount:,} 點' in clean[-1][0]
+    assert ba.get_user('points-user')==before
+    assert '天門方案 '+name in web_portal.COMMANDS
 
 
 def test_settings_can_interrupt_binding():
@@ -147,7 +168,7 @@ def test_web_commands_complete_same_flow(monkeypatch):
         response=client.get(web_portal.issue_link(uid),base_url=web_portal.ORIGIN)
         assert response.status_code==302
         session=client.get('/api/portal',base_url=web_portal.ORIGIN).json
-        for i,command in enumerate(('點數配置','點數區間 1000-3000','點數打法 標準','點數目標 30%','天門公式')):
+        for i,command in enumerate(('點數配置','點數區間 1000-3000','點數打法 標準','點數目標 30%','天門公式','天門方案 賓士')):
             response=client.post('/api/command',base_url=web_portal.ORIGIN,
                                  headers={'X-CSRF-Token':session['csrf']},
                                  json={'command':command,'mode':'baccarat','request_id':f'points-request-{i:04d}'})
@@ -156,3 +177,54 @@ def test_web_commands_complete_same_flow(monkeypatch):
             if i<3:
                 assert response.json['replies'][0]['buttons']
     assert ba.get_user(uid)['point_range']=='1000-3000'
+
+
+def tracker():
+    return store.get_state('points-user')[point_engine.TIANMEN_KEY]
+
+
+@pytest.mark.parametrize('plan',point_engine.TIANMEN_PLANS)
+def test_tianmen_five_losses_stop_ties_do_not_reset(plan,clean):
+    paid();send('開始天門 '+plan)
+    for i in range(5):
+        assert tracker()['stage']==i and tracker()['active']
+        send('天門和')
+        assert tracker()['stage']==i and tracker()['losses']==i
+        send('天門輸')
+    assert not tracker()['active'] and tracker()['losses']==5
+    before=tracker()
+    send('天門輸');send('天門贏')
+    assert tracker()==before
+    assert '五關全輸' in clean[-1][0]
+
+
+def test_tianmen_win_resets_without_stop_and_preserves_legacy():
+    paid();configure()
+    before=ba.get_user('points-user').copy()
+    send('開始天門 賓士')
+    for _ in range(8):
+        for _ in range(4): send('天門輸')
+        send('天門贏')
+        assert tracker()['stage']==0 and tracker()['losses']==0 and tracker()['active']
+    assert ba.get_user('points-user')==before
+    send('主選單');send('天門公式')
+    assert tracker()['active']
+    send('停止天門')
+    assert not tracker()['active']
+
+
+def test_tianmen_start_guard_undo_and_restart():
+    paid();send('開始天門 豐田');send('天門輸')
+    send('開始天門 勞斯')
+    assert tracker()['plan']=='豐田' and tracker()['stage']==1
+    send('撤回天門')
+    assert tracker()['stage']==0
+    send('撤回天門')
+    assert tracker()['stage']==0
+    send('停止天門');send('開始天門 勞斯')
+    assert tracker()['plan']=='勞斯' and tracker()['active']
+
+
+def test_tianmen_no_access_no_state():
+    send('開始天門 賓士')
+    assert point_engine.TIANMEN_KEY not in store.get_state('points-user')
