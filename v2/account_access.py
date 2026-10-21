@@ -31,12 +31,15 @@ def profile(uid):
             'expires_at': expiry.astimezone(membership.TZ_TW).isoformat() if expiry else None,
             'access': status in ('PAID','TRIAL')}
 
-def recent(limit=10):
+def recent(limit=10, bound_only=False):
     with store.cursor() as c:
-        c.execute('SELECT user_id,payload FROM v2_state WHERE user_id LIKE %s ORDER BY user_id LIMIT %s', (PREFIX+'%',100))
+        c.execute('SELECT user_id,payload FROM v2_state WHERE user_id LIKE %s', (PREFIX+'%',))
         rows=c.fetchall()
-    rows.sort(key=lambda row:json.loads(row[1]).get('created_at',''),reverse=True)
-    return [(key[len(PREFIX):],json.loads(payload)['uid']) for key,payload in rows[:limit]]
+    entries=[(key,json.loads(payload)) for key,payload in rows]
+    if bound_only:
+        entries=[(key,data) for key,data in entries if data.get('username')]
+    entries.sort(key=lambda row:row[1].get('bound_at') or row[1].get('created_at',''),reverse=True)
+    return [(key[len(PREFIX):],data['uid']) for key,data in entries[:limit]]
 
 HELPER_URL = 'https://lin.ee/PJeK8ti'
 SUCCESS = '綁定完成！下一步：點「找小幫手」，傳送你綁定的帳號並告知「我要開通甦贏」。\n管理員確認並開通後，再回甦贏查看會員中心與使用期限。綁定不等於開通；不需要提供密碼或驗證碼。'

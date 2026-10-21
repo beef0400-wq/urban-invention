@@ -25,6 +25,15 @@ def login(client,uid='U_web'):
 def command(client,headers,cmd,rid='01234567890123456789',mode='baccarat'):
     return client.post('/api/command',base_url=web.ORIGIN,headers=headers,json={'command':cmd,'mode':mode,'request_id':rid})
 
+def test_admin_accounts_only_show_bound_usernames():
+    with g.app.test_client() as c:
+        login(c)
+        g.ADMIN_USER_IDS={'U_web'}
+        account_access.ensure('U_unbound')
+        account_access.bind('U_named','Player_Test')
+        rows=c.get('/api/admin/accounts',base_url=web.ORIGIN).json['items']
+        assert [row['username'] for row in rows]==['Player_Test']
+
 def test_public_page_and_protected_data():
     with g.app.test_client() as c:
         assert '甦贏'.encode() in c.get('/').data

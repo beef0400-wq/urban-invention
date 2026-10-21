@@ -97,7 +97,7 @@ def install(g):
         data=identity()
         if data['uid'] not in g.ADMIN_USER_IDS: abort(403)
         if request.method=='GET':
-            return jsonify(items=[account_access.profile(uid) for code,uid in account_access.recent()])
+            return jsonify(items=[account_access.profile(uid) for code,uid in account_access.recent(bound_only=True)])
         csrf(data)
         raw=request.get_json(silent=True) or {}
         code=str(raw.get('code','')).strip().upper()

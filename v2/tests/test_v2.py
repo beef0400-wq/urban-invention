@@ -334,20 +334,37 @@ def test_admin_button_confirmation_checks_permission_every_step(isolate,monkeypa
     send('確認開通會員');assert membership.get_expiry('U2')==expiry
 
 
-def test_admin_list_includes_trial_paid_and_new_accounts(isolate,monkeypatch):
+def test_admin_list_uses_bound_names_for_trial_paid_and_new_accounts(isolate,monkeypatch):
     import account_access
     monkeypatch.setattr(g,'ADMIN_USER_IDS',{'U1'})
     for uid in ('Utrial','Upaid','Ufree'):
         g.process_event(event('會員中心',uid))
     membership.start_trial('Utrial',24)
     membership.grant_days('Upaid',30)
+    for uid in ('Utrial','Upaid','Ufree'):
+        account_access.bind(uid,'Player_'+uid)
     send('管理會員')
     text,buttons=isolate[-1]
-    for uid in ('Utrial','Upaid','Ufree','U1'):
+    for uid in ('Utrial','Upaid','Ufree'):
         code=account_access.ensure(uid)
-        assert any(command=='管理開通 '+code for _,command in buttons)
-        assert code in text
+        name='Player_'+uid
+        assert (name,'管理開通 '+name) in buttons
+        assert name in text and code not in text
+    assert 'SY-' not in str(buttons) and 'SY-' not in text
     assert '試用中' in text and '已開通' in text and '待開通' in text
+    send('管理開通 Player_Upaid');send('管理天數 7')
+    assert '帳號：Player_Upaid' in isolate[-1][0]
+    assert 'SY-' not in isolate[-1][0]
+
+
+def test_admin_list_empty_when_no_one_has_bound_an_account(isolate,monkeypatch):
+    monkeypatch.setattr(g,'ADMIN_USER_IDS',{'U1'})
+    g.process_event(event('會員中心','Uunbound'))
+    send('管理會員')
+    text,buttons=isolate[-1]
+    assert '目前沒有已綁定帳號' in text
+    assert not any(command.startswith('管理開通 ') for _,command in buttons)
+    assert 'SY-' not in text
 
 
 def test_first_message_creates_application_account(isolate):
