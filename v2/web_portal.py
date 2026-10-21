@@ -22,9 +22,9 @@ COMMANDS.update(POINT_COMMANDS)
 
 def hashed(token): return hashlib.sha256(token.encode()).hexdigest()
 def session_key(token): return 'web:session:'+hashed(token)
-def issue_link(uid):
+def issue_link(uid, target=None):
     token = secrets.token_urlsafe(32)
-    store.put_state('web:login:'+hashed(token), {'uid':uid,'expires':(membership.now_tw()+timedelta(minutes=10)).isoformat()})
+    store.put_state('web:login:'+hashed(token), {'uid':uid,'expires':(membership.now_tw()+timedelta(minutes=10)).isoformat(),'target':target if target in ('/electronics','/electronics#guides','/electronics#feedback') else '/'})
     return ORIGIN+'/enter?token='+token
 
 def identity():
@@ -69,7 +69,8 @@ def install(g):
             store.put_state(key,{})
             session=secrets.token_urlsafe(32)
             store.put_state(session_key(session),{'uid':data['uid'],'csrf':secrets.token_urlsafe(32),'expires':(membership.now_tw()+timedelta(hours=8)).isoformat()})
-        response=make_response(redirect('/'))
+        target=data.get('target','/')
+        response=make_response(redirect(target if target in ('/electronics','/electronics#guides','/electronics#feedback') else '/'))
         response.set_cookie(COOKIE,session,max_age=28800,httponly=True,secure=True,samesite='Lax')
         response.headers['Cache-Control']='no-store';response.headers['Referrer-Policy']='no-referrer'
         return response

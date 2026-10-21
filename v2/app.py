@@ -142,6 +142,7 @@ def main_menu_items():
     return [
         ("進入實戰", "開啟甦贏"),
         ("甦贏官網", OFFICIAL_SITE_URL),
+        ("電子專區", "電子專區"),
         ("百家實戰", "百家 AI"),
         ("539 好懂看盤", "539 AI"),
         ("賓果看盤", "Bingo AI"),
@@ -267,6 +268,16 @@ lotto539.reply_message=lambda token,text: reply_text(token,text,main_menu_items(
 
 def _handle_global_text(event, text, user_id, reply_token):
     normalized = text.replace("　", " ").strip()
+
+    if normalized in {'電子專區', '領取打法專區', '反饋專區'}:
+        if normalized == '電子專區':
+            reply_text(reply_token, '甦贏｜電子專區\n\n雷神、賽特的遊戲操作技巧與會員體驗。\n每週整理反饋，每兩週更新內容。', [
+                ('領取打法專區', web_portal.issue_link(user_id, '/electronics#guides')),
+                ('反饋專區', web_portal.issue_link(user_id, '/electronics#feedback'))])
+        else:
+            target = '/electronics#guides' if normalized == '領取打法專區' else '/electronics#feedback'
+            reply_text(reply_token, '甦贏｜' + normalized + '\n\n點下方開啟。專屬連結10分鐘有效，請勿轉傳。', [(normalized, web_portal.issue_link(user_id, target))])
+        return True
 
     if normalized in {'小幫手','找小幫手','聯絡客服','綁定/疑問','怎麼開通','開通教學'}:
         reply_text(reply_token, '甦贏｜開通與小幫手\n\n① 點「綁定帳號」，輸入並確認你的帳號。\n② 點「找小幫手」加入好友，傳送綁定帳號，告知「我要開通甦贏」或描述問題。\n③ 管理員驗證開通後，回「會員中心」查看使用期限。\n④ 點「使用教學」選模式，或「進入實戰」用網頁操作。\n\n綁定不等於開通。請勿提供密碼或驗證碼。', [('找小幫手',account_access.HELPER_URL),('綁定帳號','綁定帳號'),('會員中心','會員中心'),('使用教學','使用教學'),('主選單','主選單')])
@@ -495,6 +506,8 @@ def initialize():
 
 initialize()
 web_portal.install(sys.modules[__name__])
+import electronics
+electronics.install(sys.modules[__name__])
 import scheduled_verification
 VERIFICATION_SCHEDULER = scheduled_verification.start()
 
