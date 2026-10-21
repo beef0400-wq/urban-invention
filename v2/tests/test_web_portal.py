@@ -9,7 +9,8 @@ from legacy import baccarat as ba
 from datetime import timedelta
 
 @pytest.fixture(autouse=True)
-def clean():
+def clean(monkeypatch):
+    monkeypatch.setattr(g,'CHANNEL_ACCESS_TOKEN','')
     with store.cursor(True) as c:
         for table in ('v2_state','v2_records','v2_events'):c.execute('DELETE FROM '+table)
     membership._MEMORY.clear();ba.MEMORY_USERS.clear();g.ADMIN_USER_IDS=set()
@@ -175,7 +176,15 @@ def test_539_overview_separates_actual_and_forecast(monkeypatch):
         assert 'no-store' in c.get('/api/539/overview').headers['Cache-Control']
 
 
-def test_independent_account_admin_grant_is_authorized_and_idempotent():
+@pytest.mark.parametrize('notification', ['sent', 'unconfirmed'])
+def test_independent_account_admin_grant_is_authorized_and_idempotent(monkeypatch,notification):
+    import member_notifications
+    notices=[]
+    def notify(app,uid,expiry,renewed):
+        assert membership.is_paid(uid)
+        notices.append((uid,renewed))
+        return notification
+    monkeypatch.setattr(member_notifications,'send_grant',notify)
     target='U_standalone';code=account_access.ensure(target)
     with g.app.test_client() as c:
         h=login(c,'U_admin')
@@ -185,9 +194,12 @@ def test_independent_account_admin_grant_is_authorized_and_idempotent():
         assert c.post('/api/admin/accounts',base_url=web.ORIGIN,json=body).status_code==403
         out=c.post('/api/admin/accounts',base_url=web.ORIGIN,headers=h,json=body)
         assert out.status_code==200 and out.json['account']['status']=='已開通'
+        assert out.json['notification']==notification
+        assert notices==[(target,False)]
         expiry=membership.get_expiry(target)
         assert c.post('/api/admin/accounts',base_url=web.ORIGIN,headers=h,json=body).status_code==200
         assert membership.get_expiry(target)==expiry
+        assert notices==[(target,False)]
         body['days']=30
         assert c.post('/api/admin/accounts',base_url=web.ORIGIN,headers=h,json=body).status_code==409
         g.ADMIN_USER_IDS=set()

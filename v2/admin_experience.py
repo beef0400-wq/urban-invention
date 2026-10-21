@@ -1,5 +1,5 @@
 """Confirmed native-button membership management; admin authorization on every step."""
-import store,membership,account_access
+import store,membership,account_access,member_notifications
 from legacy import baccarat as ba
 
 def handle(g,text,uid,token):
@@ -35,8 +35,10 @@ def handle(g,text,uid,token):
         target_uid=account_access.resolve(action['account']);target={'line_user_id':target_uid} if target_uid else None
         if not target or target['line_user_id']!=action['uid']:
             state.pop('member_action',None);store.put_state(uid,state);g.reply_text(token,'甦贏帳號已變更，請重新選擇。',[('返回管理','管理會員')]);return True
+        renewed=membership.is_paid(action['uid'])
         exp=membership.grant_days(action['uid'],action['days'])
         state.pop('member_action',None);store.put_state(uid,state)
         store.record(uid,'admin',{'kind':'開通會員','account':action['account'],'days':action['days']})
-        g.reply_text(token,f'會員中心｜已開通\n\n帳號：{display}\n到期：{exp.strftime("%Y-%m-%d %H:%M")}\n三種模式共用權限。',[('返回管理','管理會員'),('主選單','主選單')]);return True
+        notification=member_notifications.send_grant(g,action['uid'],exp,renewed)
+        g.reply_text(token,f'會員中心｜已開通\n\n帳號：{display}\n到期：{exp.strftime("%Y-%m-%d %H:%M")}\n三種模式共用權限。\n'+member_notifications.status_text(notification),[('返回管理','管理會員'),('主選單','主選單')]);return True
     g.reply_text(token,'請先選天數，再確認開通。',[('返回管理','管理會員')]);return True

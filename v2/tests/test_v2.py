@@ -13,6 +13,7 @@ from legacy import baccarat as ba, lotto539 as lo
 
 @pytest.fixture(autouse=True)
 def isolate(monkeypatch):
+    monkeypatch.setattr(g,'CHANNEL_ACCESS_TOKEN','')
     with store.cursor(True) as c:
         for table in ('v2_records','v2_state','v2_public_539','v2_events','v2_bingo_provenance'): c.execute('DELETE FROM '+table)
     membership._MEMORY.clear();ba.MEMORY_USERS.clear();ba.MEMORY_LOGS.clear()
@@ -332,6 +333,50 @@ def test_admin_button_confirmation_checks_permission_every_step(isolate,monkeypa
     monkeypatch.setattr(g,'ADMIN_USER_IDS',{'U1'});send('確認開通會員')
     expiry=membership.get_expiry('U2');assert membership.is_paid('U2')
     send('確認開通會員');assert membership.get_expiry('U2')==expiry
+
+
+@pytest.mark.parametrize('result', ['sent', 'unconfirmed'])
+def test_admin_grant_notifies_target_once_and_keeps_grant_on_failure(isolate,monkeypatch,result):
+    import account_access, member_notifications
+    calls=[]
+    def notify(app,uid,expiry,renewed):
+        assert membership.is_paid(uid)
+        calls.append((uid,expiry,renewed))
+        return result
+    monkeypatch.setattr(member_notifications,'send_grant',notify)
+    monkeypatch.setattr(g,'ADMIN_USER_IDS',{'U1'})
+    account_access.bind('U2','Member_02')
+    send('管理開通 Member_02');send('管理天數 7');send('確認開通會員')
+    expiry=membership.get_expiry('U2')
+    assert calls==[('U2',expiry,False)]
+    assert member_notifications.status_text(result) in isolate[-1][0]
+    send('確認開通會員')
+    assert len(calls)==1 and membership.get_expiry('U2')==expiry
+    send('管理開通 Member_02');send('管理天數 3');send('確認開通會員')
+    assert calls[-1]==('U2',expiry+timedelta(days=3),True)
+
+
+@pytest.mark.parametrize('status', [200,400,429,'timeout'])
+def test_member_notice_transport_payload_and_failure(isolate,monkeypatch,status):
+    import account_access, member_notifications
+    from types import SimpleNamespace
+    account_access.bind('U2','Member_02')
+    expiry=membership.grant_days('U2',7)
+    calls=[]
+    def post(url,**kwargs):
+        calls.append((url,kwargs))
+        if status=='timeout':raise g.requests.Timeout()
+        return SimpleNamespace(status_code=status)
+    monkeypatch.setattr(g,'CHANNEL_ACCESS_TOKEN','test-token')
+    monkeypatch.setattr(g,'line_session',lambda:SimpleNamespace(post=post))
+    result=member_notifications.send_grant(g,'U2',expiry,True)
+    assert result==('sent' if status==200 else 'unconfirmed')
+    assert len(calls)==1 and calls[0][0].endswith('/message/push')
+    payload=calls[0][1]['json']
+    assert payload['to']=='U2'
+    message=json.dumps(payload['messages'],ensure_ascii=False)
+    assert all(word in message for word in ('Member_02','續期成功','開始使用','主選單',expiry.strftime('%Y-%m-%d %H:%M')))
+    assert membership.get_expiry('U2')==expiry
 
 
 def test_admin_list_uses_bound_names_for_trial_paid_and_new_accounts(isolate,monkeypatch):

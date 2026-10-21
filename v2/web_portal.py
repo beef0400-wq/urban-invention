@@ -112,9 +112,15 @@ def install(g):
             if cached:
                 if cached.get('code')!=code or cached.get('days')!=days:abort(409)
                 return jsonify(cached)
-            membership.grant_days(target,days)
+            import member_notifications
+            renewed=membership.is_paid(target)
+            expiry=membership.grant_days(target,days)
             out=dict(code=code,days=days,account=account_access.profile(target))
             store.record(data['uid'],'admin',{'kind':'甦贏帳號開通','code':code,'days':days})
+            store.put_state(key,out)
+            # Save the grant receipt before any network operation so a retry never extends twice.
+            out['notification']=member_notifications.send_grant(g,target,expiry,renewed)
+            out['notification_message']=member_notifications.status_text(out['notification'])
             store.put_state(key,out)
         return jsonify(out)
 
