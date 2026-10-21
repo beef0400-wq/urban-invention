@@ -24,3 +24,8 @@ Images downloaded from manufacturer sites, original artwork unmodified. Original
 - https://atg-games.com/storm-of-seth/character/banner_character.png
 
 Optimized ATG WebP delivered by its own image endpoint: https://atg-games.com/_ipx/f_webp/storm-of-seth/character/banner_character.png
+
+## Deployment verification
+- Render deploy dep-dbc86ics728c73eaqea0 LIVE at 2026-10-21 09:19:01Z, code commit 84b196df88865b23cdaaff8edc56d083cfcab957.
+- Cloud browser verified actual /electronics home, two entry links, 600+ statement, guides and feedback navigation. Both manufacturer images loaded successfully. Empty-state copy displayed; no placeholder testimonials published.
+- Desktop visual inspection passed. Mobile responsive CSS implemented; real phone / LINE login acceptance remains with owner. Admin upload and publishing covered locally, no fake live content added.
