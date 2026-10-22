@@ -113,6 +113,8 @@ def home_messages(raw, items):
             ('電子專區', '電子專區')]),
         ('會員與服務', '開通、教學與聯絡，都在這裡', [
             ('會員中心', '會員中心'), ('開通／綁定', '怎麼開通'),
+            ('甦贏官網', routes.get('甦贏官網', '甦贏官網')),
+            ('參考資訊', routes.get('參考資訊', 'https://ai-rational-companion-v1-test.onrender.com/learn')),
             ('操作教學', '使用教學'), ('找小幫手', routes['找小幫手'])]),
     ]:
         card = bubble('home', title, [[subtitle]], choices, 1, 1)

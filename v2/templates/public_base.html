@@ -1,0 +1,14 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#b73917"><title>{% block title %}甦贏｜看懂，再開始。{% endblock %}</title>
+  <meta name="description" content="{% block description %}認識甦贏百家實戰、539與賓果。從實際介面、操作教學到資料解讀，找到需要的資訊。{% endblock %}">
+  <link rel="icon" href="/static/favicon.svg"><link rel="stylesheet" href="/static/knowledge.css?v=20261022">
+</head>
+<body>
+<a class="skip-link" href="#content">跳到內容</a>
+<header class="site-header"><a class="wordmark" href="/">甦贏<span>看懂，再開始。</span></a><nav aria-label="主要導覽"><a href="/discover" {% if request.path=='/discover' %}aria-current="page"{% endif %}>認識甦贏</a><a href="/learn" {% if request.path.startswith('/learn') %}aria-current="page"{% endif %}>參考資訊</a><a href="/electronics">電子專區</a><a class="nav-cta" href="/#home">進入操作 <span aria-hidden="true">↗</span></a></nav></header>
+<main id="content">{% block content %}{% endblock %}</main>
+<footer class="site-footer"><div><a class="wordmark" href="/">甦贏</a><p>把紀錄整理好，讓重點更清楚。</p></div><nav aria-label="頁尾導覽"><a href="/guide/baccarat">百家實戰</a><a href="/guide/539">539</a><a href="/guide/bingo">賓果</a><a href="/learn/membership">會員與開通</a><a href="https://lin.ee/PJeK8ti" target="_blank" rel="noopener noreferrer">找小幫手 ↗</a></nav><p class="footer-note">分析與統計提供觀察參考。訊號分數、歷史比例與未來機率有不同意義。<br>© 甦贏 · <a href="/learn/reading-signals">了解數字怎麼看</a></p></footer>
+</body></html>

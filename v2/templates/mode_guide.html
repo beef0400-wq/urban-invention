@@ -1,0 +1,12 @@
+{% extends 'public_base.html' %}
+{% block title %}{{product.title}}｜介紹與操作教學 · 甦贏{% endblock %}
+{% block description %}{{product.intro}}{% endblock %}
+{% block content %}
+<div class="wrap breadcrumb"><a href="/discover">認識甦贏</a><span>/</span><span>{{product.title}}</span></div>
+<section class="wrap product-hero {{product.color}}"><div><span class="eyebrow">{{product.label}}</span><h1>{{product.title}}</h1><p class="hero-description">{{product.intro}}</p><div class="button-row"><a class="button primary" href="/#{{mode}}">進入{{product.title}} ↗</a><a class="button secondary" href="#steps">看操作步驟 ↓</a></div><p class="fine-print">個人操作需從甦贏LINE登入，會員資格會自動帶入。</p><dl class="product-facts"><div><dt>帶入什麼</dt><dd>{{product.inputs}}</dd></div><div><dt>可以看到</dt><dd>{{product.outputs}}</dd></div></dl></div><figure class="product-screen"><img src="/static/screens/{{product.image}}" alt="{{product.image_alt}}" width="780" height="1020"><figcaption>甦贏實際操作介面 · 示範帳號{% if mode=='539' %} · 示意日期，非本期推薦{% endif %}</figcaption></figure></section>
+<section class="wrap steps-section" id="steps"><div class="section-intro"><div><span class="eyebrow">一步一步來</span><h2>從這四步開始。</h2></div><a class="inline-link" href="/learn/membership">還沒登入？看開通流程 →</a></div><ol class="step-grid">{% for title,body in product.steps %}<li><span class="step-number">0{{loop.index}}</span><h3>{{title}}</h3><p>{{body}}</p></li>{% endfor %}</ol></section>
+<aside class="wrap reading-note"><span class="note-symbol" aria-hidden="true">i</span><div><h2>閱讀分析前，先了解資料範圍。</h2><p>{{product.boundary}}</p><a class="inline-link" href="/learn/reading-signals">看數字解讀 →</a></div></aside>
+<section class="wrap faq-section"><span class="eyebrow">常見問題</span><h2>操作時，你可能會想問。</h2>{% for question,answer in product.faqs %}<details><summary>{{question}}</summary><p>{{answer}}</p></details>{% endfor %}</section>
+<section class="wrap editorial"><div class="section-intro"><div><span class="eyebrow">再多了解一點</span><h2>相關參考</h2></div><a class="inline-link" href="/learn">全部文章 →</a></div><div class="article-grid">{% for slug in product.related %}{% set a=articles[slug] %}<a class="article-card" href="/learn/{{slug}}"><div class="article-meta"><span>{{a.category}}</span><span>{{a.minutes}} 分鐘</span></div><h3>{{a.title}}</h3><p>{{a.summary}}</p><span class="article-arrow" aria-hidden="true">↗</span></a>{% endfor %}</div></section>
+<section class="wrap start-banner"><div><span class="eyebrow">知道怎麼看，就開始用</span><h2>{{product.title}}</h2></div><a class="button light" href="/#{{mode}}">開始操作 ↗</a></section>
+{% endblock %}

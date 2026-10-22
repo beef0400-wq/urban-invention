@@ -28,7 +28,7 @@ app = Flask(__name__)
 APP_VERSION = "SUYING-V2.19-LIVE-POINTS"
 app.logger.setLevel(logging.INFO)
 _LINE_TRANSPORT = threading.local()
-OFFICIAL_SITE_URL = "https://offtable-lab.zippygrebe11.chatgpt.site"
+OFFICIAL_SITE_URL = "https://ai-rational-companion-v1-test.onrender.com/discover"
 SITE_COMMANDS = {"甦贏官網", "官網", "官方網站", "回官網"}
 HOME_COMMANDS = {"開始", "主選單", "回主選單", "首頁", "選單"}
 
@@ -142,6 +142,7 @@ def main_menu_items():
     return [
         ("進入實戰", "開啟甦贏"),
         ("甦贏官網", OFFICIAL_SITE_URL),
+        ("參考資訊", "https://ai-rational-companion-v1-test.onrender.com/learn"),
         ("電子專區", "電子專區"),
         ("百家實戰", "百家 AI"),
         ("539 好懂看盤", "539 AI"),
@@ -506,6 +507,8 @@ def initialize():
 
 initialize()
 web_portal.install(sys.modules[__name__])
+import knowledge
+knowledge.install(app)
 import electronics
 electronics.install(sys.modules[__name__])
 import scheduled_verification
